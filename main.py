@@ -57,10 +57,19 @@ class ConfigPanel(QWidget):
             hbox = QHBoxLayout()
             hbox.addWidget(QLabel(key))
             if isinstance(val, int):
+                slider = QSlider(Qt.Horizontal)
+                slider.setRange(0, 1000)
+                slider.setValue(val)
+                
                 spin = QSpinBox()
                 spin.setRange(0, 1000)
                 spin.setValue(val)
-                spin.valueChanged.connect(lambda v, k=key: self.update_param(k, v))
+                
+                slider.valueChanged.connect(spin.setValue)
+                spin.valueChanged.connect(slider.setValue)
+                slider.valueChanged.connect(lambda v, k=key: self.update_param(k, v))
+                
+                hbox.addWidget(slider)
                 hbox.addWidget(spin)
             elif isinstance(val, list): # For RGB
                 btn = QPushButton("選擇顏色")
