@@ -61,8 +61,6 @@ class Node:
             
             if not valid_edges:
                 input_data[name] = None
-            elif len(valid_edges) == 1:
-                input_data[name] = valid_edges[0].output_pin.data
             else:
                 if pin.pin_type == "image":
                     base_img = valid_edges[0].output_pin.data.copy()
@@ -91,6 +89,24 @@ class Node:
                         base_img[:,:,3] = np.clip(base_alpha, 0, 255).astype(np.uint8)
                     
                     input_data[name] = base_img
+                elif pin.pin_type == "mask":
+                    def extract_mask(data):
+                        if len(data.shape) > 2:
+                            # If passed an RGBA or BGR image, extract Alpha or Grayscale
+                            if data.shape[2] == 4:
+                                return data[:,:,3]
+                            else:
+                                return cv2.cvtColor(data, cv2.COLOR_BGR2GRAY)
+                        return data
+
+                    base_mask = extract_mask(valid_edges[0].output_pin.data).astype(np.float32) * valid_edges[0].weight
+                    for e in valid_edges[1:]:
+                        m = extract_mask(e.output_pin.data).astype(np.float32)
+                        if m.shape[:2] != base_mask.shape[:2]:
+                            m = cv2.resize(m, (base_mask.shape[1], base_mask.shape[0]))
+                        base_mask += m * e.weight
+                    
+                    input_data[name] = np.clip(base_mask, 0, 255).astype(np.uint8)
                 else:
                     # Non-image fallback (just take first)
                     input_data[name] = valid_edges[0].output_pin.data

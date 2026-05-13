@@ -29,18 +29,48 @@ class ImageInputNode(Node):
             return {"image": self._cached_image}
         return {"image": None}
 
-class ColorReplaceNode(Node):
+class EffectNode(Node):
+    """
+    Base class for nodes that apply an effect to an image, optionally constrained by a mask.
+    """
+    def __init__(self):
+        super().__init__()
+        self.add_input("image")
+        self.add_input("mask", pin_type="mask")
+        self.add_output("image")
+        
+    def process(self, image=None, mask=None):
+        if image is None: return {"image": None}
+        
+        result = self.apply_effect(image.copy())
+        
+        if mask is not None:
+            if mask.shape[:2] != image.shape[:2]:
+                mask = cv2.resize(mask, (image.shape[1], image.shape[0]))
+                
+            mask_normalized = mask.astype(np.float32) / 255.0
+            mask_normalized = np.expand_dims(mask_normalized, axis=-1)
+            
+            blended = image.astype(np.float32) * (1.0 - mask_normalized) + result.astype(np.float32) * mask_normalized
+            result = np.clip(blended, 0, 255).astype(np.uint8)
+            
+        return {"image": result}
+        
+    def apply_effect(self, image):
+        # Override this in subclasses
+        return image
+
+class ColorReplaceNode(EffectNode):
     def __init__(self):
         super().__init__()
         self.name = "Color Replace"
-        self.add_input("image")
-        self.add_output("image")
+        self.add_output("mask", pin_type="mask")
         self.params["target_color_rgb"] = [0, 0, 0] # 預設黑
         self.params["replace_color_rgb"] = [255, 255, 0] # 預設黃
         self.params["tolerance"] = 30
 
-    def process(self, image=None):
-        if image is None: return {"image": None}
+    def process(self, image=None, mask=None):
+        if image is None: return {"image": None, "mask": None}
         
         img_hsv = cv2.cvtColor(image[:,:,:3], cv2.COLOR_BGR2HSV)
         target_rgb = self.params["target_color_rgb"]
@@ -51,27 +81,50 @@ class ColorReplaceNode(Node):
         lower = np.array([max(0, target_hsv[0]-tol), max(0, target_hsv[1]-tol), max(0, target_hsv[2]-tol)])
         upper = np.array([min(179, target_hsv[0]+tol), min(255, target_hsv[1]+tol), min(255, target_hsv[2]+tol)])
         
-        mask = cv2.inRange(img_hsv, lower, upper)
+        out_mask = cv2.inRange(img_hsv, lower, upper)
+        
+        # Apply base effect logic
+        effect_result = super().process(image=image, mask=mask)
+        
+        return {"image": effect_result["image"], "mask": out_mask}
+
+    def apply_effect(self, image):
+        img_hsv = cv2.cvtColor(image[:,:,:3], cv2.COLOR_BGR2HSV)
+        target_rgb = self.params["target_color_rgb"]
+        target_bgr = np.uint8([[[target_rgb[2], target_rgb[1], target_rgb[0]]]])
+        target_hsv = cv2.cvtColor(target_bgr, cv2.COLOR_BGR2HSV)[0][0]
+        
+        tol = self.params["tolerance"]
+        lower = np.array([max(0, target_hsv[0]-tol), max(0, target_hsv[1]-tol), max(0, target_hsv[2]-tol)])
+        upper = np.array([min(179, target_hsv[0]+tol), min(255, target_hsv[1]+tol), min(255, target_hsv[2]+tol)])
+        
+        local_mask = cv2.inRange(img_hsv, lower, upper)
         
         result = image.copy()
         rep_rgb = self.params["replace_color_rgb"]
-        result[mask > 0] = [rep_rgb[2], rep_rgb[1], rep_rgb[0], 255] # BGRA
-        
-        return {"image": result}
+        result[local_mask > 0, :3] = [rep_rgb[2], rep_rgb[1], rep_rgb[0]]
+        return result
 
-class EdgeDetectNode(Node):
+class EdgeDetectNode(EffectNode):
     def __init__(self):
         super().__init__()
         self.name = "Edge Detect"
-        self.add_input("image")
-        self.add_output("image")
+        self.add_output("mask", pin_type="mask")
         self.params["threshold1"] = 100
         self.params["threshold2"] = 200
         self.params["edge_color_rgb"] = [255, 0, 0] # 預設紅
 
-    def process(self, image=None):
-        if image is None: return {"image": None}
+    def process(self, image=None, mask=None):
+        if image is None: return {"image": None, "mask": None}
         
+        gray = cv2.cvtColor(image[:,:,:3], cv2.COLOR_BGR2GRAY)
+        edges = cv2.Canny(gray, self.params["threshold1"], self.params["threshold2"])
+        
+        effect_result = super().process(image=image, mask=mask)
+        
+        return {"image": effect_result["image"], "mask": edges}
+
+    def apply_effect(self, image):
         gray = cv2.cvtColor(image[:,:,:3], cv2.COLOR_BGR2GRAY)
         edges = cv2.Canny(gray, self.params["threshold1"], self.params["threshold2"])
         
@@ -80,23 +133,19 @@ class EdgeDetectNode(Node):
         result[edges > 0, :3] = [ec[2], ec[1], ec[0]]
         result[edges > 0, 3] = image[edges > 0, 3]
         
-        return {"image": result}
+        return result
 
-class BlurNode(Node):
+class BlurNode(EffectNode):
     def __init__(self):
         super().__init__()
         self.name = "Gaussian Blur"
-        self.add_input("image")
-        self.add_output("image")
         self.params["kernel_size"] = 5
 
-    def process(self, image=None):
-        if image is None: return {"image": None}
+    def apply_effect(self, image):
         k = int(self.params["kernel_size"])
         if k % 2 == 0: k += 1
         if k < 1: k = 1
-        result = cv2.GaussianBlur(image, (k, k), 0)
-        return {"image": result}
+        return cv2.GaussianBlur(image, (k, k), 0)
 
 class MergeNode(Node):
     def __init__(self):

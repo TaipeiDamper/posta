@@ -9,6 +9,7 @@ class PinItem(QGraphicsEllipseItem):
         self.pin = pin
         self.is_input = is_input
         self.setBrush(QBrush(Qt.green if is_input else Qt.cyan))
+        self.setToolTip(pin.name)
         self.connections = []
 
     def add_connection(self, connection):
@@ -77,7 +78,8 @@ class ConnectionItem(QGraphicsPathItem):
             self.out_pin_item.remove_connection(self)
         if self.in_pin_item:
             self.in_pin_item.remove_connection(self)
-            self.in_pin_item.pin.disconnect()
+            if self.edge_model:
+                self.in_pin_item.pin.disconnect_edge(self.edge_model)
         if self.scene():
             self.scene().removeItem(self)
 
