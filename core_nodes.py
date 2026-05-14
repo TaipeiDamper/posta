@@ -210,8 +210,6 @@ class TintNode(EffectNode):
         self.params["tint_color_rgb"] = [100, 150, 255]
 
     def apply_effect(self, image):
-        # 轉為浮點數進行運算
-        img_f = image.astype(np.float32) / 255.0
         tint = self.params["tint_color_rgb"]
         # 使用簡易的染色法：保留亮度，改變色調
         gray = cv2.cvtColor(image[:,:,:3], cv2.COLOR_BGR2GRAY).astype(np.float32) / 255.0
@@ -329,3 +327,121 @@ class SwitcherNode(Node):
             
         keys = ["In 1", "In 2", "In 3"]
         return {"Image Out": kwargs.get(keys[self.current_idx])}
+
+# ============== 新增節點 ==============
+
+class TextNode(Node):
+    """文字渲染節點：將文字繪製到透明背景的圖片上。"""
+    def __init__(self):
+        super().__init__()
+        self.name = "文字 (Text)"
+        self.add_input("Image In")  # 選填，作為底圖尺寸參考
+        self.add_output("Image Out")
+        self.params["text"] = "Hello"
+        self.params["font_scale"] = 2
+        self.params["thickness"] = 3
+        self.params["text_color_rgb"] = [255, 255, 255]
+        self.params["pos_x"] = 50
+        self.params["pos_y"] = 50
+
+    def process(self, **kwargs):
+        base = kwargs.get("Image In")
+        
+        if base is not None:
+            result = base.copy()
+        else:
+            result = np.zeros((512, 512, 4), dtype=np.uint8)
+            result[:,:,3] = 255
+        
+        text = str(self.params.get("text", "Hello"))
+        scale = max(0.1, float(self.params.get("font_scale", 2)))
+        thick = max(1, int(self.params.get("thickness", 3)))
+        rgb = self.params.get("text_color_rgb", [255, 255, 255])
+        bgr = (rgb[2], rgb[1], rgb[0])
+        px = int(self.params.get("pos_x", 50))
+        py = int(self.params.get("pos_y", 50))
+        
+        cv2.putText(result, text, (px, py), cv2.FONT_HERSHEY_SIMPLEX, scale, bgr, thick, cv2.LINE_AA)
+        
+        return {"Image Out": result}
+
+class SmartCropNode(Node):
+    """智慧裁切節點：自動偵測主體並裁切成指定比例。"""
+    def __init__(self):
+        super().__init__()
+        self.name = "智慧裁切 (Crop)"
+        self.add_input("Image In")
+        self.add_output("Image Out")
+        self.params["ratio_w"] = 9
+        self.params["ratio_h"] = 16
+
+    def process(self, **kwargs):
+        image = kwargs.get("Image In")
+        if image is None: return {"Image Out": None}
+        
+        h, w = image.shape[:2]
+        target_r = self.params["ratio_w"] / max(1, self.params["ratio_h"])
+        current_r = w / h
+        
+        if current_r > target_r:
+            # 圖片太寬，從左右裁切
+            new_w = int(h * target_r)
+            # 嘗試以灰階找到主體質心來決定中心偏移
+            gray = cv2.cvtColor(image[:,:,:3], cv2.COLOR_BGR2GRAY)
+            _, thresh = cv2.threshold(gray, 30, 255, cv2.THRESH_BINARY)
+            M = cv2.moments(thresh)
+            if M["m00"] > 0:
+                cx = int(M["m10"] / M["m00"])
+            else:
+                cx = w // 2
+            
+            x1 = max(0, min(cx - new_w // 2, w - new_w))
+            result = image[:, x1:x1+new_w]
+        else:
+            # 圖片太高，從上下裁切
+            new_h = int(w / target_r)
+            gray = cv2.cvtColor(image[:,:,:3], cv2.COLOR_BGR2GRAY)
+            _, thresh = cv2.threshold(gray, 30, 255, cv2.THRESH_BINARY)
+            M = cv2.moments(thresh)
+            if M["m00"] > 0:
+                cy = int(M["m01"] / M["m00"])
+            else:
+                cy = h // 2
+            
+            y1 = max(0, min(cy - new_h // 2, h - new_h))
+            result = image[y1:y1+new_h, :]
+        
+        return {"Image Out": result}
+
+class ValueNode(Node):
+    """全域數值節點：輸出一個浮點數值，可以同時接到多個節點的參數。"""
+    def __init__(self):
+        super().__init__()
+        self.name = "數值 (Value)"
+        self.add_output("Value Out", pin_type="value")
+        self.params["value"] = 50
+
+    def process(self, **kwargs):
+        return {"Value Out": self.params.get("value", 50)}
+
+class ColorOutputNode(Node):
+    """全域顏色節點：輸出一個 RGB 顏色值。"""
+    def __init__(self):
+        super().__init__()
+        self.name = "顏色 (Color)"
+        self.add_output("Color Out", pin_type="color")
+        self.params["output_color_rgb"] = [255, 255, 255]
+
+    def process(self, **kwargs):
+        return {"Color Out": self.params.get("output_color_rgb", [255, 255, 255])}
+
+class RerouteNode(Node):
+    """轉向點節點：純粹轉發資料，用於整理連線走位。"""
+    def __init__(self):
+        super().__init__()
+        self.name = "轉向 (Reroute)"
+        self.add_input("In")
+        self.add_output("Out")
+
+    def process(self, **kwargs):
+        return {"Out": kwargs.get("In")}

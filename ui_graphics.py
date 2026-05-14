@@ -3,24 +3,31 @@ from PySide6.QtWidgets import *
 from PySide6.QtGui import *
 from PySide6.QtCore import *
 
+# ==================== Pin 連線點 ====================
 class PinItem(QGraphicsEllipseItem):
+    # 顏色映射表：不同資料類型不同顏色
+    TYPE_COLORS = {
+        "image": QColor(0, 200, 255),    # 青藍色
+        "mask":  QColor(255, 255, 0),    # 黃色
+        "value": QColor(180, 100, 255),  # 紫色
+        "color": QColor(255, 120, 60),   # 橘色
+    }
+
     def __init__(self, pin, is_input, parent=None):
         super().__init__(-10, -10, 20, 20, parent)
         self.pin = pin
         self.is_input = is_input
         
-        # 不同類型的點給予不同顏色方便辨識
-        if pin.pin_type == "mask":
-            color = QColor(255, 255, 0) # 黃色代表遮罩 (Mask)
-        else:
-            color = QColor(0, 255, 255) if not is_input else QColor(0, 200, 100) # 青色代表圖片 (Image)
+        color = self.TYPE_COLORS.get(pin.pin_type, QColor(200, 200, 200))
+        if is_input:
+            color = color.darker(120)
             
         self.setBrush(QBrush(color))
         self.setToolTip(f"{pin.name} ({pin.pin_type})")
         self.connections = []
 
     def shape(self):
-        # 擴大判定範圍，讓點擊更容易命中，不需要點得很精準
+        # 擴大判定範圍，讓點擊更容易命中
         path = QPainterPath()
         path.addEllipse(-18, -18, 36, 36)
         return path
@@ -32,16 +39,29 @@ class PinItem(QGraphicsEllipseItem):
         if connection in self.connections:
             self.connections.remove(connection)
 
+# ==================== 連線 ====================
 class ConnectionItem(QGraphicsPathItem):
+    # 連線顏色映射：根據輸出端 pin 類型決定
+    TYPE_COLORS = {
+        "image": QColor(100, 200, 255, 180),
+        "mask":  QColor(255, 255, 100, 180),
+        "value": QColor(180, 130, 255, 180),
+        "color": QColor(255, 150, 80, 180),
+    }
+
     def __init__(self, out_pin_item, in_pin_item=None):
         super().__init__()
         self.out_pin_item = out_pin_item
         self.in_pin_item = in_pin_item
-        self.setPen(QPen(Qt.white, 2))
         self.setZValue(-1)
         self.setFlag(QGraphicsItem.ItemIsSelectable)
         self.target_pos = None
         self.edge_model = None
+        
+        # 依據 pin 類型設定線段顏色
+        pin_type = out_pin_item.pin.pin_type if out_pin_item else "image"
+        self._line_color = self.TYPE_COLORS.get(pin_type, QColor(200, 200, 200, 180))
+        self.setPen(QPen(self._line_color, 2.5))
         
         self.weight_text = QGraphicsTextItem("1.0", self)
         self.weight_text.setDefaultTextColor(Qt.yellow)
@@ -49,7 +69,7 @@ class ConnectionItem(QGraphicsPathItem):
 
     def shape(self):
         path_stroker = QPainterPathStroker()
-        path_stroker.setWidth(8) # 稍微縮小線段的判定區，避免干擾點擊 Pin
+        path_stroker.setWidth(8)
         return path_stroker.createStroke(self.path())
 
     def contextMenuEvent(self, event):
@@ -65,8 +85,9 @@ class ConnectionItem(QGraphicsPathItem):
             if ok:
                 self.edge_model.weight = val
                 self.weight_text.setPlainText(str(val))
-                if hasattr(self.scene().parent(), "evaluate_graph"):
-                    self.scene().parent().evaluate_graph()
+                scene = self.scene()
+                if scene and scene.parent() and hasattr(scene.parent(), "evaluate_graph"):
+                    scene.parent().evaluate_graph()
         elif action == bypass_act:
             self.edge_model.bypassed = not self.edge_model.bypassed
             self.update()
@@ -86,11 +107,15 @@ class ConnectionItem(QGraphicsPathItem):
         event.accept()
 
     def paint(self, painter, option, widget=None):
-        if self.isSelected():
-            painter.setPen(QPen(Qt.red, 3))
+        if self.edge_model and self.edge_model.bypassed:
+            # Bypass 狀態：用灰色虛線表示
+            pen = QPen(QColor(100, 100, 100, 120), 2, Qt.DashLine)
+        elif self.isSelected():
+            pen = QPen(QColor(255, 80, 80), 3)
         else:
-            painter.setPen(QPen(Qt.white, 2))
-        super().paint(painter, option, widget)
+            pen = QPen(self._line_color, 2.5)
+        painter.setPen(pen)
+        painter.drawPath(self.path())
 
     def remove(self):
         if self.out_pin_item:
@@ -114,7 +139,6 @@ class ConnectionItem(QGraphicsPathItem):
         path = QPainterPath()
         path.moveTo(start_pos)
         dx = end_pos.x() - start_pos.x()
-        dy = end_pos.y() - start_pos.y()
         ctrl1 = QPointF(start_pos.x() + dx * 0.5, start_pos.y())
         ctrl2 = QPointF(start_pos.x() + dx * 0.5, end_pos.y())
         path.cubicTo(ctrl1, ctrl2, end_pos)
@@ -122,6 +146,7 @@ class ConnectionItem(QGraphicsPathItem):
         
         self.weight_text.setPos(end_pos.x() - 25, end_pos.y() - 20)
 
+# ==================== 節點 ====================
 class NodeItem(QGraphicsRectItem):
     def __init__(self, node_model, parent=None):
         super().__init__(0, 0, 150, 100, parent)
@@ -129,8 +154,8 @@ class NodeItem(QGraphicsRectItem):
         self.setFlag(QGraphicsItem.ItemIsMovable)
         self.setFlag(QGraphicsItem.ItemIsSelectable)
         self.setFlag(QGraphicsItem.ItemSendsGeometryChanges)
-        self.setBrush(QBrush(QColor(40, 40, 40)))
-        self.setPen(QPen(Qt.black))
+        self.setBrush(QBrush(QColor(50, 50, 50)))
+        self.setPen(QPen(QColor(80, 80, 80)))
         
         self.title = QGraphicsTextItem(node_model.name, self)
         self.title.setDefaultTextColor(Qt.white)
@@ -148,27 +173,52 @@ class NodeItem(QGraphicsRectItem):
             text.setDefaultTextColor(Qt.lightGray)
             text.setPos(10, y - 10)
             self.pin_items[pin.id] = pi
-            y += 20
+            y += 22
             
-        y = 30
+        y_out = 30
         for name, pin in self.node_model.outputs.items():
             pi = PinItem(pin, False, self)
-            pi.setPos(153, y)
+            pi.setPos(153, y_out)
             text = QGraphicsTextItem(name, self)
             text.setDefaultTextColor(Qt.lightGray)
-            text.setPos(150 - text.boundingRect().width() - 10, y - 10)
+            text.setPos(150 - text.boundingRect().width() - 10, y_out - 10)
             self.pin_items[pin.id] = pi
-            y += 20
+            y_out += 22
             
         # Adjust height
-        self.setRect(0, 0, 150, max(60, y + 10))
+        self.setRect(0, 0, 150, max(60, max(y, y_out) + 10))
+
+    def paint(self, painter, option, widget=None):
+        rect = self.rect()
+        
+        if self.node_model.bypassed:
+            # Bypass 狀態：暗化 + 半透明紅色邊框
+            painter.setBrush(QBrush(QColor(30, 30, 30, 160)))
+            painter.setPen(QPen(QColor(200, 60, 60, 180), 2, Qt.DashLine))
+        elif self.isSelected():
+            painter.setBrush(self.brush())
+            painter.setPen(QPen(QColor(255, 180, 100), 2))
+        else:
+            painter.setBrush(self.brush())
+            painter.setPen(self.pen())
+        
+        painter.drawRoundedRect(rect, 4, 4)
 
     def contextMenuEvent(self, event):
         menu = QMenu()
+        bypass_act = menu.addAction("跳過節點 (Bypass)" if not self.node_model.bypassed else "恢復節點")
         del_act = menu.addAction("刪除節點 (Delete)")
         
         action = menu.exec(event.screenPos())
-        if action == del_act:
+        if action == bypass_act:
+            self.node_model.bypassed = not self.node_model.bypassed
+            self.update()
+            scene = self.scene()
+            if scene and scene.parent() and hasattr(scene.parent(), "evaluate_graph"):
+                scene.parent().evaluate_graph()
+                if hasattr(scene.parent(), "save_state"):
+                    scene.parent().save_state()
+        elif action == del_act:
             scene = self.scene()
             self.remove()
             if scene and scene.parent() and hasattr(scene.parent(), "evaluate_graph"):
@@ -193,6 +243,133 @@ class NodeItem(QGraphicsRectItem):
                 self.scene().graph.remove_node(self.node_model)
             self.scene().removeItem(self)
 
+# ==================== 群組外框 (Backdrop) ====================
+class BackdropItem(QGraphicsRectItem):
+    def __init__(self, x, y, w=400, h=300, parent=None):
+        super().__init__(x, y, w, h, parent)
+        self.setFlag(QGraphicsItem.ItemIsMovable)
+        self.setFlag(QGraphicsItem.ItemIsSelectable)
+        self.setFlag(QGraphicsItem.ItemSendsGeometryChanges)
+        self.setZValue(-100)  # 確保在所有節點之下
+        
+        self._color = QColor(60, 80, 120, 60)
+        self.setBrush(QBrush(self._color))
+        self.setPen(QPen(QColor(100, 140, 200, 120), 2, Qt.DashLine))
+        
+        self.title = QGraphicsTextItem("群組", self)
+        self.title.setDefaultTextColor(QColor(180, 210, 255))
+        font = self.title.font()
+        font.setPointSize(12)
+        font.setBold(True)
+        self.title.setFont(font)
+        self.title.setPos(x + 10, y + 5)
+        
+        # 允許調整大小的控制點
+        self._resizing = False
+        self._resize_start = None
+
+    def paint(self, painter, option, widget=None):
+        painter.setBrush(self.brush())
+        painter.setPen(self.pen())
+        painter.drawRoundedRect(self.rect(), 8, 8)
+        
+        # 繪製右下角的縮放把手
+        rect = self.rect()
+        handle = QRectF(rect.right() - 16, rect.bottom() - 16, 14, 14)
+        painter.setBrush(QBrush(QColor(150, 180, 220, 100)))
+        painter.drawRect(handle)
+
+    def contextMenuEvent(self, event):
+        menu = QMenu()
+        color_act = menu.addAction("變更顏色")
+        rename_act = menu.addAction("重新命名")
+        del_act = menu.addAction("刪除群組")
+        
+        action = menu.exec(event.screenPos())
+        if action == color_act:
+            color = QColorDialog.getColor(self._color)
+            if color.isValid():
+                color.setAlpha(60)
+                self._color = color
+                self.setBrush(QBrush(color))
+                self.update()
+        elif action == rename_act:
+            text, ok = QInputDialog.getText(None, "群組名稱", "名稱:", text=self.title.toPlainText())
+            if ok and text:
+                self.title.setPlainText(text)
+        elif action == del_act:
+            if self.scene():
+                self.scene().removeItem(self)
+        event.accept()
+
+    def mousePressEvent(self, event):
+        rect = self.rect()
+        handle = QRectF(rect.right() - 20, rect.bottom() - 20, 20, 20)
+        if handle.contains(event.pos()):
+            self._resizing = True
+            self._resize_start = event.pos()
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        if self._resizing and self._resize_start:
+            delta = event.pos() - self._resize_start
+            rect = self.rect()
+            new_w = max(100, rect.width() + delta.x())
+            new_h = max(80, rect.height() + delta.y())
+            self.setRect(rect.x(), rect.y(), new_w, new_h)
+            self._resize_start = event.pos()
+            return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        self._resizing = False
+        self._resize_start = None
+        super().mouseReleaseEvent(event)
+
+# ==================== 便利貼 (Sticky Note) ====================
+class StickyNoteItem(QGraphicsRectItem):
+    def __init__(self, x, y, parent=None):
+        super().__init__(x, y, 180, 100, parent)
+        self.setFlag(QGraphicsItem.ItemIsMovable)
+        self.setFlag(QGraphicsItem.ItemIsSelectable)
+        self.setZValue(-50)
+        
+        self.setBrush(QBrush(QColor(255, 250, 150, 200)))
+        self.setPen(QPen(QColor(200, 190, 100), 1))
+        
+        self.text_item = QGraphicsTextItem("備忘錄...", self)
+        self.text_item.setDefaultTextColor(QColor(60, 50, 20))
+        self.text_item.setPos(x + 5, y + 5)
+        self.text_item.setTextWidth(170)
+        
+    def paint(self, painter, option, widget=None):
+        painter.setBrush(self.brush())
+        painter.setPen(self.pen())
+        painter.drawRoundedRect(self.rect(), 3, 3)
+        # 小陰影效果
+        shadow = self.rect().adjusted(2, 2, 2, 2)
+        painter.setBrush(QBrush(QColor(0, 0, 0, 30)))
+        painter.setPen(Qt.NoPen)
+        painter.drawRoundedRect(shadow, 3, 3)
+
+    def contextMenuEvent(self, event):
+        menu = QMenu()
+        edit_act = menu.addAction("編輯文字")
+        del_act = menu.addAction("刪除便利貼")
+        
+        action = menu.exec(event.screenPos())
+        if action == edit_act:
+            text, ok = QInputDialog.getMultiLineText(None, "便利貼", "文字:", self.text_item.toPlainText())
+            if ok:
+                self.text_item.setPlainText(text)
+        elif action == del_act:
+            if self.scene():
+                self.scene().removeItem(self)
+        event.accept()
+
+# ==================== 場景 ====================
 class GraphScene(QGraphicsScene):
     def __init__(self, graph, parent=None):
         super().__init__(parent)
@@ -203,6 +380,26 @@ class GraphScene(QGraphicsScene):
         
     def add_node(self, node_item):
         self.addItem(node_item)
+
+    def contextMenuEvent(self, event):
+        # 只在空白區域顯示場景級右鍵選單
+        item = self.itemAt(event.scenePos(), QTransform())
+        if item is None:
+            menu = QMenu()
+            backdrop_act = menu.addAction("新增群組外框 (Backdrop)")
+            note_act = menu.addAction("新增便利貼 (Note)")
+            
+            action = menu.exec(event.screenPos())
+            pos = event.scenePos()
+            if action == backdrop_act:
+                bd = BackdropItem(pos.x(), pos.y())
+                self.addItem(bd)
+            elif action == note_act:
+                note = StickyNoteItem(pos.x(), pos.y())
+                self.addItem(note)
+            event.accept()
+            return
+        super().contextMenuEvent(event)
         
     def keyPressEvent(self, event):
         if event.key() == Qt.Key_Delete or event.key() == Qt.Key_Backspace:
@@ -212,6 +409,8 @@ class GraphScene(QGraphicsScene):
                 if isinstance(item, ConnectionItem) or isinstance(item, NodeItem):
                     item.remove()
                     has_changes = True
+                elif isinstance(item, BackdropItem) or isinstance(item, StickyNoteItem):
+                    self.removeItem(item)
             if has_changes and hasattr(self.parent(), "evaluate_graph"):
                 self.parent().evaluate_graph()
                 if hasattr(self.parent(), "save_state"):

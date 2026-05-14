@@ -7,7 +7,7 @@ class Pin:
     def __init__(self, node, name: str, pin_type: str = "image"):
         self.node = node
         self.name = name
-        self.pin_type = pin_type
+        self.pin_type = pin_type  # "image", "mask", "value", "color"
         self.id = str(uuid.uuid4())
 
 class Edge:
@@ -26,14 +26,18 @@ class InputPin(Pin):
     def connect(self, output_pin: 'OutputPin') -> Edge:
         edge = Edge(output_pin, self)
         self.edges.append(edge)
+        # 標記下游節點為 dirty
+        self.node.mark_dirty()
         return edge
 
     def disconnect_edge(self, edge: Edge):
         if edge in self.edges:
             self.edges.remove(edge)
+            self.node.mark_dirty()
 
     def disconnect_all(self):
         self.edges.clear()
+        self.node.mark_dirty()
 
 class OutputPin(Pin):
     def __init__(self, node, name: str, pin_type: str = "image"):
@@ -47,12 +51,42 @@ class Node:
         self.inputs: Dict[str, InputPin] = {}
         self.outputs: Dict[str, OutputPin] = {}
         self.params: Dict[str, Any] = {}
+        self._dirty = True            # 節點是否需要重新運算
+        self._cached_outputs = None   # 上一次的運算結果快取
+        self._last_params_hash = None # 用於偵測參數變動
+        self.bypassed = False         # 節點層級的 bypass 開關
 
     def add_input(self, name: str, pin_type: str = "image"):
         self.inputs[name] = InputPin(self, name, pin_type)
 
     def add_output(self, name: str, pin_type: str = "image"):
         self.outputs[name] = OutputPin(self, name, pin_type)
+
+    def mark_dirty(self):
+        """標記此節點及所有下游節點為 dirty，需要重新運算。"""
+        if self._dirty:
+            return  # 已經 dirty 就不再傳遞，避免無窮遞迴
+        self._dirty = True
+        # 傳遞 dirty 給所有下游節點
+        for out_pin in self.outputs.values():
+            # 找到所有以此 output pin 為源頭的 edge
+            if hasattr(out_pin, '_downstream_edges'):
+                for edge in out_pin._downstream_edges:
+                    edge.input_pin.node.mark_dirty()
+
+    def _params_hash(self):
+        """生成參數的簡易雜湊，用於偵測參數變動。"""
+        try:
+            return hash(str(sorted(self.params.items())))
+        except TypeError:
+            return hash(str(self.params))
+
+    def check_params_changed(self):
+        """檢查參數是否有變動，有的話標記 dirty。"""
+        current_hash = self._params_hash()
+        if current_hash != self._last_params_hash:
+            self._last_params_hash = current_hash
+            self._dirty = True
 
     @staticmethod
     def _extract_mask(data):
@@ -65,6 +99,17 @@ class Node:
         return data
 
     def evaluate(self):
+        # 先檢查參數是否有變動
+        self.check_params_changed()
+
+        # 如果節點沒有被標記為 dirty，直接跳過運算
+        if not self._dirty and self._cached_outputs is not None:
+            # 仍然要更新 output pin 的 data（因為下游會來讀取）
+            for name, data in self._cached_outputs.items():
+                if name in self.outputs:
+                    self.outputs[name].data = data
+            return
+
         input_data = {}
         for name, pin in self.inputs.items():
             valid_edges = [e for e in pin.edges if not e.bypassed and e.output_pin.data is not None]
@@ -120,15 +165,18 @@ class Node:
                     
                     input_data[name] = np.clip(base_mask, 0, 255).astype(np.uint8)
                 else:
-                    # Non-image fallback (just take first)
+                    # Non-image fallback (value/color — just take first)
                     input_data[name] = valid_edges[0].output_pin.data
         
         output_data = self.process(**input_data)
         
         if output_data:
+            self._cached_outputs = output_data
             for name, data in output_data.items():
                 if name in self.outputs:
                     self.outputs[name].data = data
+        
+        self._dirty = False
 
     def process(self, **kwargs) -> Dict[str, Any]:
         return {}
@@ -136,6 +184,7 @@ class Node:
 class Graph:
     def __init__(self):
         self.nodes: List[Node] = []
+        self.proxy_scale = 1.0  # 1.0 = 全解析度, 0.5 = 半解析度
 
     def add_node(self, node: Node):
         self.nodes.append(node)
@@ -150,6 +199,11 @@ class Graph:
                     for e in edges_to_remove:
                         in_pin.disconnect_edge(e)
             self.nodes.remove(node)
+
+    def mark_all_dirty(self):
+        """強制標記所有節點為 dirty，需要全部重算。"""
+        for node in self.nodes:
+            node._dirty = True
 
     def evaluate(self):
         visited = set()
@@ -169,3 +223,26 @@ class Graph:
 
         for node in order:
             node.evaluate()
+
+    def to_json(self):
+        """匯出圖表為可序列化的字典。"""
+        data = {"nodes": [], "edges": []}
+        for node in self.nodes:
+            data["nodes"].append({
+                "id": node.id,
+                "type": node.__class__.__name__,
+                "name": node.name,
+                "params": dict(node.params),
+                "bypassed": node.bypassed,
+            })
+            for pin_name, in_pin in node.inputs.items():
+                for edge in in_pin.edges:
+                    data["edges"].append({
+                        "out_node": edge.output_pin.node.id,
+                        "out_pin": edge.output_pin.name,
+                        "in_node": node.id,
+                        "in_pin": pin_name,
+                        "weight": edge.weight,
+                        "bypassed": edge.bypassed,
+                    })
+        return data
