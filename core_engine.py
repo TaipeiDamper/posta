@@ -1,7 +1,22 @@
 import uuid
-from typing import Dict, List, Any
+from typing import Dict, List, Any, Set
 import cv2
 import numpy as np
+
+# 輸入 Pin 類型 -> 允許的輸出 Pin 類型（與 UI 連線規則一致）
+INPUT_PIN_ACCEPTS_OUTPUT_TYPES: Dict[str, Set[str]] = {
+    "image": {"image"},
+    "mask": {"mask", "image"},
+    "value": {"value"},
+    "color": {"color"},
+}
+
+
+def can_connect_pins(output_pin_type: str, input_pin_type: str) -> bool:
+    allowed = INPUT_PIN_ACCEPTS_OUTPUT_TYPES.get(input_pin_type)
+    if allowed is None:
+        return output_pin_type == input_pin_type
+    return output_pin_type in allowed
 
 class Pin:
     def __init__(self, node, name: str, pin_type: str = "image"):
@@ -24,8 +39,15 @@ class InputPin(Pin):
         self.edges: List[Edge] = []
 
     def connect(self, output_pin: 'OutputPin') -> Edge:
+        if not can_connect_pins(output_pin.pin_type, self.pin_type):
+            raise ValueError(
+                f"無法連線：輸出類型 {output_pin.pin_type!r} 與輸入 {self.name} ({self.pin_type!r}) 不相容"
+            )
         edge = Edge(output_pin, self)
         self.edges.append(edge)
+        if not hasattr(output_pin, "_downstream_edges") or output_pin._downstream_edges is None:
+            output_pin._downstream_edges = []
+        output_pin._downstream_edges.append(edge)
         # 標記下游節點為 dirty
         self.node.mark_dirty()
         return edge
@@ -33,16 +55,21 @@ class InputPin(Pin):
     def disconnect_edge(self, edge: Edge):
         if edge in self.edges:
             self.edges.remove(edge)
+            op = edge.output_pin
+            ds = getattr(op, "_downstream_edges", None)
+            if ds and edge in ds:
+                ds.remove(edge)
             self.node.mark_dirty()
 
     def disconnect_all(self):
-        self.edges.clear()
-        self.node.mark_dirty()
+        for edge in list(self.edges):
+            self.disconnect_edge(edge)
 
 class OutputPin(Pin):
     def __init__(self, node, name: str, pin_type: str = "image"):
         super().__init__(node, name, pin_type)
         self.data = None
+        self._downstream_edges: List[Edge] = []
 
 class Node:
     def __init__(self):
@@ -55,6 +82,7 @@ class Node:
         self._cached_outputs = None   # 上一次的運算結果快取
         self._last_params_hash = None # 用於偵測參數變動
         self.bypassed = False         # 節點層級的 bypass 開關
+        self.param_meta = {}        # 參數 UI 範圍等元資料，子類可覆寫或填入
 
     def add_input(self, name: str, pin_type: str = "image"):
         self.inputs[name] = InputPin(self, name, pin_type)
@@ -69,10 +97,12 @@ class Node:
         self._dirty = True
         # 傳遞 dirty 給所有下游節點
         for out_pin in self.outputs.values():
-            # 找到所有以此 output pin 為源頭的 edge
-            if hasattr(out_pin, '_downstream_edges'):
-                for edge in out_pin._downstream_edges:
-                    edge.input_pin.node.mark_dirty()
+            # 確保下游邊緣列表存在且可迭代
+            edges = getattr(out_pin, '_downstream_edges', [])
+            if edges:
+                for edge in edges:
+                    if edge and edge.input_pin and edge.input_pin.node:
+                        edge.input_pin.node.mark_dirty()
 
     def _params_hash(self):
         """生成參數的簡易雜湊，用於偵測參數變動。"""
@@ -210,19 +240,44 @@ class Graph:
         order = []
 
         def visit(n: Node):
-            if n in visited:
+            if n is None or n in visited:
                 return
-            for pin in n.inputs.values():
-                for edge in pin.edges:
-                    visit(edge.output_pin.node)
+            # 確保 inputs 存在且可迭代
+            inputs = getattr(n, 'inputs', {})
+            if inputs is None: inputs = {}
+            
+            for pin in inputs.values():
+                if pin is None: continue
+                # 確保 edges 存在且可迭代
+                edges = getattr(pin, 'edges', [])
+                if edges is None: edges = []
+                
+                for edge in edges:
+                    if edge and edge.output_pin and edge.output_pin.node:
+                        visit(edge.output_pin.node)
             visited.add(n)
             order.append(n)
 
-        for node in self.nodes:
+        # 確保 nodes 列表存在
+        nodes_to_process = getattr(self, 'nodes', [])
+        if nodes_to_process is None: nodes_to_process = []
+        
+        for node in nodes_to_process:
             visit(node)
 
         for node in order:
-            node.evaluate()
+            if node is None: continue
+            try:
+                node.evaluate()
+                node._status = "normal"
+                if hasattr(node, "_error_message"):
+                    node._error_message = None
+            except Exception as e:
+                import traceback
+                error_detail = traceback.format_exc()
+                print(f"!!! 節點運算崩潰 !!!\n節點: {getattr(node, 'name', 'Unknown')}\n型別: {node.__class__.__name__}\n原因: {e}\n詳情:\n{error_detail}")
+                node._status = "error"
+                node._error_message = str(e)
 
     def to_json(self):
         """匯出圖表為可序列化的字典。"""

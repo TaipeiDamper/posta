@@ -3,6 +3,10 @@ from PySide6.QtWidgets import *
 from PySide6.QtGui import *
 from PySide6.QtCore import *
 
+from core_engine import can_connect_pins
+
+SNAP_PIN_DISTANCE = 28.0
+
 # ==================== Pin 連線點 ====================
 class PinItem(QGraphicsEllipseItem):
     # 顏色映射表：不同資料類型不同顏色
@@ -86,24 +90,21 @@ class ConnectionItem(QGraphicsPathItem):
                 self.edge_model.weight = val
                 self.weight_text.setPlainText(str(val))
                 scene = self.scene()
-                if scene and scene.parent() and hasattr(scene.parent(), "evaluate_graph"):
-                    scene.parent().evaluate_graph()
+                if isinstance(scene, GraphScene):
+                    scene.graph_structure_changed.emit()
         elif action == bypass_act:
             self.edge_model.bypassed = not self.edge_model.bypassed
             self.update()
             scene = self.scene()
-            if scene and scene.parent() and hasattr(scene.parent(), "evaluate_graph"):
-                scene.parent().evaluate_graph()
-                if hasattr(scene.parent(), "save_state"):
-                    scene.parent().save_state()
+            if isinstance(scene, GraphScene):
+                scene.graph_structure_changed.emit()
+                scene.graph_state_changed.emit()
         elif action == del_act:
             scene = self.scene()
             self.remove()
-            if scene and hasattr(scene.parent(), "evaluate_graph"):
-                scene.parent().evaluate_graph()
-                if hasattr(scene.parent(), "save_state"):
-                    scene.parent().save_state()
-        
+            if isinstance(scene, GraphScene):
+                scene.graph_structure_changed.emit()
+                scene.graph_state_changed.emit()
         event.accept()
 
     def paint(self, painter, option, widget=None):
@@ -131,8 +132,26 @@ class ConnectionItem(QGraphicsPathItem):
         start_pos = self.out_pin_item.scenePos()
         if self.in_pin_item:
             end_pos = self.in_pin_item.scenePos()
+            self.setPen(QPen(self._line_color, 2.5))
         elif self.target_pos:
             end_pos = self.target_pos
+            scene = self.scene()
+            out_t = self.out_pin_item.pin.pin_type
+            if scene and isinstance(scene, GraphScene):
+                snap_pi = scene.find_nearest_compatible_input_pin(end_pos, out_t, SNAP_PIN_DISTANCE)
+                if snap_pi is not None:
+                    end_pos = snap_pi.scenePos()
+            if scene:
+                items = scene.items(end_pos)
+                pin_item = next((item for item in items if isinstance(item, PinItem)), None)
+                if pin_item and pin_item.is_input:
+                    if can_connect_pins(out_t, pin_item.pin.pin_type):
+                        end_pos = pin_item.scenePos()
+                        self.setPen(QPen(QColor(0, 255, 0), 3))
+                    else:
+                        self.setPen(QPen(QColor(255, 0, 0), 3, Qt.DashLine))
+                else:
+                    self.setPen(QPen(self._line_color, 2.5))
         else:
             return
 
@@ -161,6 +180,9 @@ class NodeItem(QGraphicsRectItem):
         self.title.setDefaultTextColor(Qt.white)
         self.title.setPos(5, 5)
         
+        self.thumbnail = QGraphicsPixmapItem(self)
+        self.is_collapsed = False
+        
         self.pin_items = {}
         self.create_pins()
 
@@ -186,15 +208,55 @@ class NodeItem(QGraphicsRectItem):
             y_out += 22
             
         # Adjust height
-        self.setRect(0, 0, 150, max(60, max(y, y_out) + 10))
+        max_y = max(y, y_out)
+        self.collapsed_height = max_y + 10
+        self.expanded_height = self.collapsed_height
+        self.setRect(0, 0, 150, self.expanded_height)
+
+    def update_thumbnail(self):
+        if hasattr(self.node_model, '_cached_outputs') and self.node_model._cached_outputs is not None and 'Image Out' in self.node_model._cached_outputs:
+            import cv2
+            img = self.node_model._cached_outputs['Image Out']
+            if img is not None:
+                h, w = img.shape[:2]
+                rgba = cv2.cvtColor(img, cv2.COLOR_BGRA2RGBA)
+                qimg = QImage(rgba.data, w, h, 4*w, QImage.Format_RGBA8888)
+                pix = QPixmap.fromImage(qimg).scaled(100, 100, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+                self.thumbnail.setPixmap(pix)
+                self.thumbnail.setPos(75 - pix.width()//2, self.collapsed_height)
+                self.expanded_height = self.collapsed_height + pix.height() + 10
+                if not self.is_collapsed:
+                    self.setRect(0, 0, 150, self.expanded_height)
+            else:
+                self.thumbnail.setPixmap(QPixmap())
+                self.expanded_height = self.collapsed_height
+                if not self.is_collapsed:
+                    self.setRect(0, 0, 150, self.expanded_height)
+
+    def mouseDoubleClickEvent(self, event):
+        self.is_collapsed = not self.is_collapsed
+        if self.is_collapsed:
+            self.setRect(0, 0, 150, self.collapsed_height)
+            self.thumbnail.hide()
+        else:
+            self.setRect(0, 0, 150, self.expanded_height)
+            self.thumbnail.show()
+        event.accept()
 
     def paint(self, painter, option, widget=None):
         rect = self.rect()
+        status = getattr(self.node_model, '_status', 'normal')
         
         if self.node_model.bypassed:
             # Bypass 狀態：暗化 + 半透明紅色邊框
-            painter.setBrush(QBrush(QColor(30, 30, 30, 160)))
+            painter.setBrush(QBrush(QColor(30, 30, 30, 120)))
             painter.setPen(QPen(QColor(200, 60, 60, 180), 2, Qt.DashLine))
+        elif status == 'running':
+            painter.setBrush(self.brush())
+            painter.setPen(QPen(QColor(255, 255, 0), 3))
+        elif status == 'error':
+            painter.setBrush(self.brush())
+            painter.setPen(QPen(QColor(255, 50, 50), 3))
         elif self.isSelected():
             painter.setBrush(self.brush())
             painter.setPen(QPen(QColor(255, 180, 100), 2))
@@ -214,17 +276,15 @@ class NodeItem(QGraphicsRectItem):
             self.node_model.bypassed = not self.node_model.bypassed
             self.update()
             scene = self.scene()
-            if scene and scene.parent() and hasattr(scene.parent(), "evaluate_graph"):
-                scene.parent().evaluate_graph()
-                if hasattr(scene.parent(), "save_state"):
-                    scene.parent().save_state()
+            if isinstance(scene, GraphScene):
+                scene.graph_structure_changed.emit()
+                scene.graph_state_changed.emit()
         elif action == del_act:
             scene = self.scene()
             self.remove()
-            if scene and scene.parent() and hasattr(scene.parent(), "evaluate_graph"):
-                scene.parent().evaluate_graph()
-                if hasattr(scene.parent(), "save_state"):
-                    scene.parent().save_state()
+            if isinstance(scene, GraphScene):
+                scene.graph_structure_changed.emit()
+                scene.graph_state_changed.emit()
         event.accept()
 
     def itemChange(self, change, value):
@@ -232,6 +292,12 @@ class NodeItem(QGraphicsRectItem):
             for pin_item in self.pin_items.values():
                 for conn in pin_item.connections:
                     conn.update_path()
+        elif change == QGraphicsItem.ItemPositionChange and self.scene():
+            # Snap to Grid (20px)
+            new_pos = value
+            x = round(new_pos.x() / 20) * 20
+            y = round(new_pos.y() / 20) * 20
+            return QPointF(x, y)
         return super().itemChange(change, value)
 
     def remove(self):
@@ -371,24 +437,71 @@ class StickyNoteItem(QGraphicsRectItem):
 
 # ==================== 場景 ====================
 class GraphScene(QGraphicsScene):
+    graph_structure_changed = Signal()
+    graph_state_changed = Signal()
+
     def __init__(self, graph, parent=None):
         super().__init__(parent)
         self.graph = graph
         self.setSceneRect(-2000, -2000, 4000, 4000)
-        self.setBackgroundBrush(QBrush(QColor(30, 30, 30)))
         self.current_connection = None
-        
+
+    def iter_pin_items(self):
+        for it in self.items():
+            if isinstance(it, NodeItem):
+                for pi in it.pin_items.values():
+                    yield pi
+
+    def set_pin_drag_highlight(self, out_pin_type):
+        for pi in self.iter_pin_items():
+            if pi.is_input:
+                ok = can_connect_pins(out_pin_type, pi.pin.pin_type)
+                pi.setOpacity(1.0 if ok else 0.3)
+            else:
+                pi.setOpacity(0.45)
+
+    def clear_pin_drag_highlight(self):
+        for pi in self.iter_pin_items():
+            pi.setOpacity(1.0)
+
+    def find_nearest_compatible_input_pin(self, scene_pos, out_pin_type, max_dist):
+        best = None
+        best_d = max_dist * max_dist
+        for it in self.items():
+            if not isinstance(it, NodeItem):
+                continue
+            for pi in it.pin_items.values():
+                if not pi.is_input:
+                    continue
+                if not can_connect_pins(out_pin_type, pi.pin.pin_type):
+                    continue
+                p = pi.scenePos()
+                dx, dy = p.x() - scene_pos.x(), p.y() - scene_pos.y()
+                d2 = dx * dx + dy * dy
+                if d2 <= best_d:
+                    best_d = d2
+                    best = pi
+        return best
+
+    def drawBackground(self, painter, rect):
+        painter.fillRect(rect, QColor(30, 30, 30))
+        left = int(rect.left()) - (int(rect.left()) % 20)
+        top = int(rect.top()) - (int(rect.top()) % 20)
+        painter.setPen(QPen(QColor(60, 60, 60), 1))
+        for x in range(left, int(rect.right()), 20):
+            for y in range(top, int(rect.bottom()), 20):
+                painter.drawPoint(x, y)
+
     def add_node(self, node_item):
         self.addItem(node_item)
 
     def contextMenuEvent(self, event):
-        # 只在空白區域顯示場景級右鍵選單
         item = self.itemAt(event.scenePos(), QTransform())
         if item is None:
             menu = QMenu()
             backdrop_act = menu.addAction("新增群組外框 (Backdrop)")
             note_act = menu.addAction("新增便利貼 (Note)")
-            
+
             action = menu.exec(event.screenPos())
             pos = event.scenePos()
             if action == backdrop_act:
@@ -400,7 +513,7 @@ class GraphScene(QGraphicsScene):
             event.accept()
             return
         super().contextMenuEvent(event)
-        
+
     def keyPressEvent(self, event):
         if event.key() == Qt.Key_Delete or event.key() == Qt.Key_Backspace:
             items_to_remove = self.selectedItems()
@@ -411,24 +524,23 @@ class GraphScene(QGraphicsScene):
                     has_changes = True
                 elif isinstance(item, BackdropItem) or isinstance(item, StickyNoteItem):
                     self.removeItem(item)
-            if has_changes and hasattr(self.parent(), "evaluate_graph"):
-                self.parent().evaluate_graph()
-                if hasattr(self.parent(), "save_state"):
-                    self.parent().save_state()
+            if has_changes:
+                self.graph_structure_changed.emit()
+                self.graph_state_changed.emit()
         super().keyPressEvent(event)
-        
+
     def mousePressEvent(self, event):
-        # 優先判定點擊到的 PinItem，即使與其他物件重疊
         items = self.items(event.scenePos())
         pin_item = next((item for item in items if isinstance(item, PinItem)), None)
-        
+
         if pin_item and not pin_item.is_input:
             self.current_connection = ConnectionItem(pin_item)
             self.addItem(self.current_connection)
             pin_item.add_connection(self.current_connection)
-            event.accept() # 攔截事件，防止觸發背景或節點拖曳
+            self.set_pin_drag_highlight(pin_item.pin.pin_type)
+            event.accept()
             return
-            
+
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event):
@@ -439,23 +551,35 @@ class GraphScene(QGraphicsScene):
 
     def mouseReleaseEvent(self, event):
         if self.current_connection:
-            items = self.items(event.scenePos())
+            self.clear_pin_drag_highlight()
+            pos = event.scenePos()
+            snap_pi = self.find_nearest_compatible_input_pin(
+                pos,
+                self.current_connection.out_pin_item.pin.pin_type,
+                SNAP_PIN_DISTANCE,
+            )
+            if snap_pi is not None:
+                pos = snap_pi.scenePos()
+            items = self.items(pos)
             pin_item = next((item for item in items if isinstance(item, PinItem)), None)
-            
+
             if pin_item and pin_item.is_input:
-                self.current_connection.in_pin_item = pin_item
-                pin_item.add_connection(self.current_connection)
-                self.current_connection.update_path()
-                
-                # Logic connection
-                edge = pin_item.pin.connect(self.current_connection.out_pin_item.pin)
-                self.current_connection.edge_model = edge
-                self.current_connection.weight_text.show()
-                # trigger update on parent view
-                if hasattr(self.parent(), "evaluate_graph"):
-                    self.parent().evaluate_graph()
-                    if hasattr(self.parent(), "save_state"):
-                        self.parent().save_state()
+                if can_connect_pins(
+                    self.current_connection.out_pin_item.pin.pin_type,
+                    pin_item.pin.pin_type,
+                ):
+                    self.current_connection.in_pin_item = pin_item
+                    pin_item.add_connection(self.current_connection)
+                    self.current_connection.update_path()
+
+                    edge = pin_item.pin.connect(self.current_connection.out_pin_item.pin)
+                    self.current_connection.edge_model = edge
+                    self.current_connection.weight_text.show()
+                    self.graph_structure_changed.emit()
+                    self.graph_state_changed.emit()
+                else:
+                    self.current_connection.out_pin_item.remove_connection(self.current_connection)
+                    self.removeItem(self.current_connection)
             else:
                 self.current_connection.out_pin_item.remove_connection(self.current_connection)
                 self.removeItem(self.current_connection)
