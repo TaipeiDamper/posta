@@ -54,6 +54,16 @@ class Node:
     def add_output(self, name: str, pin_type: str = "image"):
         self.outputs[name] = OutputPin(self, name, pin_type)
 
+    @staticmethod
+    def _extract_mask(data):
+        """從任意格式的圖片資料中擷取單通道遮罩。"""
+        if len(data.shape) > 2:
+            if data.shape[2] == 4:
+                return data[:,:,3]
+            else:
+                return cv2.cvtColor(data, cv2.COLOR_BGR2GRAY)
+        return data
+
     def evaluate(self):
         input_data = {}
         for name, pin in self.inputs.items():
@@ -64,6 +74,11 @@ class Node:
             else:
                 if pin.pin_type == "image":
                     base_img = valid_edges[0].output_pin.data.copy()
+                    
+                    if len(base_img.shape) == 2:
+                        base_img = cv2.cvtColor(base_img, cv2.COLOR_GRAY2BGRA)
+                    elif len(base_img.shape) == 3 and base_img.shape[2] == 3:
+                        base_img = cv2.cvtColor(base_img, cv2.COLOR_BGR2BGRA)
                     
                     if len(valid_edges) == 1:
                         w = valid_edges[0].weight
@@ -78,7 +93,13 @@ class Node:
                         base_alpha = base_img_float[:,:,3] * valid_edges[0].weight
                         
                         for e in valid_edges[1:]:
-                            img = e.output_pin.data.astype(np.float32)
+                            img = e.output_pin.data.copy()
+                            if len(img.shape) == 2:
+                                img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGRA)
+                            elif len(img.shape) == 3 and img.shape[2] == 3:
+                                img = cv2.cvtColor(img, cv2.COLOR_BGR2BGRA)
+                            
+                            img = img.astype(np.float32)
                             if img.shape[:2] != base_img.shape[:2]:
                                 img = cv2.resize(img, (base_img.shape[1], base_img.shape[0]))
                             
@@ -90,18 +111,9 @@ class Node:
                     
                     input_data[name] = base_img
                 elif pin.pin_type == "mask":
-                    def extract_mask(data):
-                        if len(data.shape) > 2:
-                            # If passed an RGBA or BGR image, extract Alpha or Grayscale
-                            if data.shape[2] == 4:
-                                return data[:,:,3]
-                            else:
-                                return cv2.cvtColor(data, cv2.COLOR_BGR2GRAY)
-                        return data
-
-                    base_mask = extract_mask(valid_edges[0].output_pin.data).astype(np.float32) * valid_edges[0].weight
+                    base_mask = Node._extract_mask(valid_edges[0].output_pin.data).astype(np.float32) * valid_edges[0].weight
                     for e in valid_edges[1:]:
-                        m = extract_mask(e.output_pin.data).astype(np.float32)
+                        m = Node._extract_mask(e.output_pin.data).astype(np.float32)
                         if m.shape[:2] != base_mask.shape[:2]:
                             m = cv2.resize(m, (base_mask.shape[1], base_mask.shape[0]))
                         base_mask += m * e.weight

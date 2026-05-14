@@ -5,12 +5,25 @@ from PySide6.QtCore import *
 
 class PinItem(QGraphicsEllipseItem):
     def __init__(self, pin, is_input, parent=None):
-        super().__init__(-7, -7, 14, 14, parent)
+        super().__init__(-10, -10, 20, 20, parent)
         self.pin = pin
         self.is_input = is_input
-        self.setBrush(QBrush(Qt.green if is_input else Qt.cyan))
-        self.setToolTip(pin.name)
+        
+        # 不同類型的點給予不同顏色方便辨識
+        if pin.pin_type == "mask":
+            color = QColor(255, 255, 0) # 黃色代表遮罩 (Mask)
+        else:
+            color = QColor(0, 255, 255) if not is_input else QColor(0, 200, 100) # 青色代表圖片 (Image)
+            
+        self.setBrush(QBrush(color))
+        self.setToolTip(f"{pin.name} ({pin.pin_type})")
         self.connections = []
+
+    def shape(self):
+        # 擴大判定範圍，讓點擊更容易命中，不需要點得很精準
+        path = QPainterPath()
+        path.addEllipse(-18, -18, 36, 36)
+        return path
 
     def add_connection(self, connection):
         self.connections.append(connection)
@@ -36,7 +49,7 @@ class ConnectionItem(QGraphicsPathItem):
 
     def shape(self):
         path_stroker = QPainterPathStroker()
-        path_stroker.setWidth(12) # Make hitbox larger
+        path_stroker.setWidth(8) # 稍微縮小線段的判定區，避免干擾點擊 Pin
         return path_stroker.createStroke(self.path())
 
     def contextMenuEvent(self, event):
@@ -57,12 +70,18 @@ class ConnectionItem(QGraphicsPathItem):
         elif action == bypass_act:
             self.edge_model.bypassed = not self.edge_model.bypassed
             self.update()
-            if hasattr(self.scene().parent(), "evaluate_graph"):
-                self.scene().parent().evaluate_graph()
+            scene = self.scene()
+            if scene and scene.parent() and hasattr(scene.parent(), "evaluate_graph"):
+                scene.parent().evaluate_graph()
+                if hasattr(scene.parent(), "save_state"):
+                    scene.parent().save_state()
         elif action == del_act:
+            scene = self.scene()
             self.remove()
-            if hasattr(self.scene().parent(), "evaluate_graph"):
-                self.scene().parent().evaluate_graph()
+            if scene and hasattr(scene.parent(), "evaluate_graph"):
+                scene.parent().evaluate_graph()
+                if hasattr(scene.parent(), "save_state"):
+                    scene.parent().save_state()
         
         event.accept()
 
@@ -144,6 +163,20 @@ class NodeItem(QGraphicsRectItem):
         # Adjust height
         self.setRect(0, 0, 150, max(60, y + 10))
 
+    def contextMenuEvent(self, event):
+        menu = QMenu()
+        del_act = menu.addAction("刪除節點 (Delete)")
+        
+        action = menu.exec(event.screenPos())
+        if action == del_act:
+            scene = self.scene()
+            self.remove()
+            if scene and scene.parent() and hasattr(scene.parent(), "evaluate_graph"):
+                scene.parent().evaluate_graph()
+                if hasattr(scene.parent(), "save_state"):
+                    scene.parent().save_state()
+        event.accept()
+
     def itemChange(self, change, value):
         if change == QGraphicsItem.ItemPositionHasChanged:
             for pin_item in self.pin_items.values():
@@ -181,14 +214,22 @@ class GraphScene(QGraphicsScene):
                     has_changes = True
             if has_changes and hasattr(self.parent(), "evaluate_graph"):
                 self.parent().evaluate_graph()
+                if hasattr(self.parent(), "save_state"):
+                    self.parent().save_state()
         super().keyPressEvent(event)
         
     def mousePressEvent(self, event):
-        item = self.itemAt(event.scenePos(), QTransform())
-        if isinstance(item, PinItem) and not item.is_input:
-            self.current_connection = ConnectionItem(item)
+        # 優先判定點擊到的 PinItem，即使與其他物件重疊
+        items = self.items(event.scenePos())
+        pin_item = next((item for item in items if isinstance(item, PinItem)), None)
+        
+        if pin_item and not pin_item.is_input:
+            self.current_connection = ConnectionItem(pin_item)
             self.addItem(self.current_connection)
-            item.add_connection(self.current_connection)
+            pin_item.add_connection(self.current_connection)
+            event.accept() # 攔截事件，防止觸發背景或節點拖曳
+            return
+            
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event):
@@ -199,19 +240,23 @@ class GraphScene(QGraphicsScene):
 
     def mouseReleaseEvent(self, event):
         if self.current_connection:
-            item = self.itemAt(event.scenePos(), QTransform())
-            if isinstance(item, PinItem) and item.is_input:
-                self.current_connection.in_pin_item = item
-                item.add_connection(self.current_connection)
+            items = self.items(event.scenePos())
+            pin_item = next((item for item in items if isinstance(item, PinItem)), None)
+            
+            if pin_item and pin_item.is_input:
+                self.current_connection.in_pin_item = pin_item
+                pin_item.add_connection(self.current_connection)
                 self.current_connection.update_path()
                 
                 # Logic connection
-                edge = item.pin.connect(self.current_connection.out_pin_item.pin)
+                edge = pin_item.pin.connect(self.current_connection.out_pin_item.pin)
                 self.current_connection.edge_model = edge
                 self.current_connection.weight_text.show()
                 # trigger update on parent view
                 if hasattr(self.parent(), "evaluate_graph"):
                     self.parent().evaluate_graph()
+                    if hasattr(self.parent(), "save_state"):
+                        self.parent().save_state()
             else:
                 self.current_connection.out_pin_item.remove_connection(self.current_connection)
                 self.removeItem(self.current_connection)
