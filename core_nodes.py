@@ -342,26 +342,56 @@ class SwitcherNode(Node):
         self.add_input("In 3")
         self.add_output("Image Out")
         self.params["interval_s"] = 0.5
+        self.params["smooth"] = 0  # 0 = 硬切, 1 = 平滑過渡
         self.current_idx = 0
+        self._blend_progress = 0.0
         import time
         self.last_switch = time.time()
         self.param_meta["interval_s"] = {"min": 0.0, "max": 2.0, "step": 0.1, "decimals": 2}
+        self.param_meta["smooth"] = {"min": 0, "max": 1}
 
     def advance_if_due(self) -> bool:
-        """由主視窗計時器呼叫：僅在間隔到期時切換索引並標記 dirty。"""
+        """由主視窗計時器呼叫：硬切模式僅在到期時切換；平滑模式持續更新混合進度。"""
         import time
         now = time.time()
-        interval = max(0.1, float(self.params.get("interval_s", 2)))
-        if now - self.last_switch < interval:
-            return False
-        self.current_idx = (self.current_idx + 1) % 3
-        self.last_switch = now
-        self.mark_dirty()
-        return True
+        interval = max(0.05, float(self.params.get("interval_s", 0.5)))
+        elapsed = now - self.last_switch
+        is_smooth = self.params.get("smooth", 0)
+
+        if is_smooth:
+            # 平滑模式：持續更新混合進度
+            self._blend_progress = min(1.0, elapsed / interval)
+            if elapsed >= interval:
+                self.current_idx = (self.current_idx + 1) % 3
+                self.last_switch = now
+                self._blend_progress = 0.0
+            self.mark_dirty()
+            return True
+        else:
+            # 硬切模式
+            if elapsed < interval:
+                return False
+            self.current_idx = (self.current_idx + 1) % 3
+            self.last_switch = now
+            self._blend_progress = 0.0
+            self.mark_dirty()
+            return True
 
     def process(self, **kwargs):
         keys = ["In 1", "In 2", "In 3"]
-        return {"Image Out": kwargs.get(keys[self.current_idx])}
+        current_img = kwargs.get(keys[self.current_idx])
+
+        if self.params.get("smooth", 0) and self._blend_progress > 0.001:
+            next_idx = (self.current_idx + 1) % 3
+            next_img = kwargs.get(keys[next_idx])
+            if current_img is not None and next_img is not None:
+                if current_img.shape[:2] != next_img.shape[:2]:
+                    next_img = cv2.resize(next_img, (current_img.shape[1], current_img.shape[0]))
+                alpha = self._blend_progress
+                blended = cv2.addWeighted(current_img, 1.0 - alpha, next_img, alpha, 0)
+                return {"Image Out": blended}
+
+        return {"Image Out": current_img}
 
 # ============== 新增節點 ==============
 

@@ -365,9 +365,17 @@ class MainWindow(QMainWindow):
 
     def on_timer_tick(self):
         any_switch = False
+        need_fast = False
         for n in self.graph.nodes:
-            if isinstance(n, SwitcherNode) and n.advance_if_due():
-                any_switch = True
+            if isinstance(n, SwitcherNode):
+                if n.params.get("smooth", 0):
+                    need_fast = True
+                if n.advance_if_due():
+                    any_switch = True
+        # 動態調整計時器間隔：平滑模式 50ms (~20fps)，否則 500ms
+        target_interval = 50 if need_fast else 500
+        if self.timer.interval() != target_interval:
+            self.timer.setInterval(target_interval)
         if any_switch:
             self.schedule_evaluate(immediate=True)
 
