@@ -32,7 +32,7 @@
 | ImageInput 注入 | `core_nodes.py`、`main.py` | `ImageInputNode.set_external_image_source(fn)`；建立／還原時綁定 `lambda: self.global_input_image`，不再覆寫 `process` |
 | 節點參數 meta | `core_engine.py`、`core_nodes.py`、`main.py` | `Node.param_meta`；`ConfigPanel._numeric_range_for_key` 優先讀 meta，否則沿用字串規則；多節點已填 `param_meta` |
 | Switcher 定時重算 | `core_nodes.py`、`main.py` | `advance_if_due()` 僅在間隔到期時切索引並 `mark_dirty()`；`on_timer_tick` 僅在回傳 True 時 `evaluate_graph()` |
-| Halftone 小優化 | `core_nodes.py` | `cv2.circle` 改 `LINE_8`（仍為 Python 雙迴圈，大優化待做） |
+| Halftone 優化 | `core_nodes.py` | **已完成向量化**：使用 `np.ogrid` 建立座標網格並透過 `np.where` 進行批量運算，取代原本的 Python 雙迴圈 |
 | Grain 快取 | `core_nodes.py` | `seed` 參數、`np.random.default_rng(seed)`、依 `(h,w,intensity,color_noise,seed)` 快取雜訊陣列 |
 | Pin 型別（引擎 + UI） | `core_engine.py`、`ui_graphics.py` | `INPUT_PIN_ACCEPTS_OUTPUT_TYPES` + `can_connect_pins()`；`InputPin.connect` 驗證；拖線／釋放與筆色共用同一套規則 |
 | 單節點錯誤 | `core_engine.py`、`main.py` | `Graph.evaluate` 每節點 `try/except`，`_status` / `_error_message`；`evaluate_graph` 後對 `NodeItem` `setToolTip` |
@@ -41,17 +41,17 @@
 | 啟動時評估 | `main.py` | `setup_default_nodes` 後接 `evaluate_graph()`，與 Signal 連線後再跑，避免初始畫面不同步 |
 | 連線 UX（磁吸／Pin 弱化） | `ui_graphics.py` | 拖線時 `set_pin_drag_highlight`；相容輸入 Pin 磁吸（`SNAP_PIN_DISTANCE`）；`mouseRelease` 與 `ConnectionItem.update_path` 與 `can_connect_pins` 一致 |
 
-**仍未做（與本文件原建議對照）**：`main.py` 拆檔（image_io / factory / history / serializer）、裝飾器式 `NODE_REGISTRY`、全節點 `param_meta` 覆蓋、`QThread` 非同步 `evaluate`、Halftone 向量化大改。
+**仍未做（與本文件原建議對照）**：`main.py` 拆檔（image_io / factory / history / serializer）、裝飾器式 `NODE_REGISTRY`、全節點 `param_meta` 覆蓋、`QThread` 非同步 `evaluate`。（Halftone 向量化已見 §0／§4.1，不再列於此。）
 
 ---
 
 ## 1. 整體架構總覽
 
 ```
-main.py（約 578 行）         → UI 主視窗 + 業務邏輯
-  ├── core_engine.py（約 218 行）  → DAG 圖引擎
-  ├── core_nodes.py（約 574 行）   → 所有節點定義
-  └── ui_graphics.py（約 498 行）  → 場景 / 節點 / 連線繪製
+main.py（約 850 行）          → UI 主視窗 + 業務邏輯
+  ├── core_engine.py（約 300 行）  → DAG 圖引擎
+  ├── core_nodes.py（約 690 行）   → 所有節點定義
+  └── ui_graphics.py（約 605 行）  → 場景 / 節點 / 連線繪製
 ```
 
 **現狀評價**：四檔案的職責劃分大方向正確，但 `main.py` 仍承擔過多角色（UI 佈局、圖片 I/O、節點工廠、歷史管理、序列化還原等），是最適合逐步拆分的對象。
@@ -93,10 +93,11 @@ main.py（約 578 行）         → UI 主視窗 + 業務邏輯
 - **與現況對照（部分已實作）**：`Node.param_meta` + `ConfigPanel._numeric_range_for_key` 已接上；多數節點仍可依賴舊字串後備規則。尚未全面為每個參數鍵補齊 meta。
 - **修正方向**：由節點或基底類別宣告 `min` / `max` / `editor` 型別，`ConfigPanel` 僅讀 meta 產生控件。
 
-### 3.3 main.py 職責拆分
+### 3.3 main.py 職責拆分 (🚨 最優先項目)
 
-- **問題**：`MainWindow` 仍混合多種職責。
-- **建議拆分**（與初稿相同，作為長期方向）：
+- **問題**：`MainWindow` 仍混合多種職責，程式碼長度已達 850+ 行，嚴重影響可讀性與後續非同步評估的實作。
+- **目標**：將業務邏輯、I/O、歷史管理等抽離，使 `main.py` 僅負責 UI 編排。
+- **建議拆分**：
 
 ```
 main.py              → 進入點 + MainWindow（偏 UI 編排）
@@ -120,9 +121,9 @@ serializer.py        → export / import / restore_graph_state
 ### 4.1 HalftoneNode 網格迴圈
 
 - **檔案**：`core_nodes.py` 中 `HalftoneNode.apply_effect`
-- **現況**：已改為「先縮小灰階 → 對 **小網格** `small_w × small_h` 雙層迴圈**逐格 `cv2.circle`**」；相較初稿所寫「對全圖每像素」的描述已較輕，但 **Python 層雙迴圈 + 每格畫圓** 仍是大圖瓶頸。
-- **已做小改**：`cv2.LINE_8` 取代 `LINE_AA`，略減繪圖成本。
-- **修正方向（仍建議）**：向量化或預建 tile / LUT、減少 Python 迴圈次數；或改用純 numpy / resize 策略權衡畫質與速度。
+- **現況**：**已實作向量化**（使用 `np.ogrid` 與 `np.where`）。
+- **優點**：顯著提升大圖運算速度，移除 Python 層級的雙重迴圈開銷。
+- **後續**：可進一步考慮多線程支援。
 
 ### 4.2 SwitcherNode 定時全量重算
 
@@ -182,16 +183,13 @@ serializer.py        → export / import / restore_graph_state
 | P0 | 2.1 paste_image 崩潰 | Bug | 貼上無效／異常剪貼簿內容 | ⭐ | 已處理 |
 | P0 | 2.2 Dirty 下游傳播 | Bug | 快取與拓撲可能不一致 | ⭐⭐ | 已處理 |
 | P1 | 4.2 Switcher 全量重算 | 效能 | 有 Switcher 時持續重算 | ⭐ | 已處理（條件 dirty） |
-| P1 | 4.1 Halftone 迴圈優化 | 效能 | 大圖、大網點參數 | ⭐⭐ | 部分（LINE_8） |
+| P0 | 3.3 main 拆分 | 模組化 | 可維護性 / 開發基準 | ⭐⭐⭐ | **即將執行** |
+| P1 | 4.4 非同步運算 | 效能 | UI 流暢度 | ⭐⭐⭐ | 未做 |
 | P2 | 3.1 節點註冊表 | 模組化 | 新增節點維護成本 | ⭐⭐ | 未做（僅衍生表） |
 | P2 | 3.2 ConfigPanel 元資料 | 模組化 | 參數 UI 可維護性 | ⭐⭐ | 部分（meta + 後備） |
-| P2 | 5.3 ImageInput lambda | 架構 | 封裝／還原一致性 | ⭐ | 已處理 |
-| P2 | 5.4 顯式類別表 | 架構 | 還原穩健性 | ⭐ | 已處理 |
-| P3 | 3.3 main 拆分 | 模組化 | 可維護性 | ⭐⭐⭐ | 未做 |
-| P3 | 3.4 Signal 解耦 | 模組化 | 架構品質 | ⭐⭐ | 已處理 |
-| P3 | 4.3 Grain 雜訊快取 | 效能／UX | 重算與畫面穩定度 | ⭐ | 已處理 |
-| P3 | 4.4 非同步運算 | 效能 | UI 流暢度 | ⭐⭐⭐ | 未做 |
-| P3 | 5.1 Pin 類型驗證（引擎） | 架構 | 錯誤預防 | ⭐⭐ | 已處理 |
-| P3 | 5.2 Redo | 架構 | 使用者體驗 | ⭐⭐ | 已處理 |
+| P3 | 4.1 Halftone 向量化 | 效能 | 大圖運算速度 | ⭐⭐ | **已完成** |
 
-**建議執行順序**：P0 / 多數 P1·P2·P3 已落地；後續優先可排 **非同步 evaluate**、**main 拆分**、**Halftone 向量化**、**NODE_REGISTRY**。
+**建議執行順序**：
+1. **[當前首要]** 執行 **3.3 main.py 職責拆分**，建立乾淨的架構底座。
+2. 基於拆分後的架構，導入 **4.4 非同步 evaluate**。
+3. 補齊 **3.1 NODE_REGISTRY** 與其餘 P2 項目。

@@ -167,14 +167,32 @@ class ConnectionItem(QGraphicsPathItem):
 
 # ==================== 節點 ====================
 class NodeItem(QGraphicsRectItem):
-    def __init__(self, node_model, parent=None):
-        super().__init__(0, 0, 150, 100, parent)
+    def _get_color_for_node(self, node):
+        """根據節點型別決定顏色"""
+        name = node.__class__.__name__
+        if "Input" in name or "Output" in name:
+            return QColor(44, 62, 80) # 深藍
+        elif name in ("EdgeDetectNode", "SobelEdgeNode", "ThresholdContourNode", "PencilSketchNode", "BlurNode"):
+            return QColor(39, 174, 96) # 綠色 (濾鏡)
+        elif name in ("LumaNode", "MidtoneKeyNode", "BrightnessContrastNode", "InvertNode", "MaskInvertNode", "TintNode", "ColorReplaceNode", "PosterizeNode", "GradientMapNode"):
+            return QColor(211, 84, 0)  # 橘色 (顏色)
+        elif name in ("MergeNode", "BlendNode", "SwitcherNode"):
+            return QColor(41, 128, 185) # 青藍 (合成)
+        elif name in ("TextNode", "SmartCropNode"):
+            return QColor(142, 68, 173) # 紫色 (變形/文字)
+        return QColor(50, 50, 50)     # 預設深灰
+
+    def __init__(self, node_model, scene=None):
+        super().__init__()
         self.node_model = node_model
+        if scene: scene.addItem(self)
+        
         self.setFlag(QGraphicsItem.ItemIsMovable)
         self.setFlag(QGraphicsItem.ItemIsSelectable)
         self.setFlag(QGraphicsItem.ItemSendsGeometryChanges)
-        self.setBrush(QBrush(QColor(50, 50, 50)))
-        self.setPen(QPen(QColor(80, 80, 80)))
+        
+        self.setBrush(QBrush(self._get_color_for_node(node_model)))
+        self.setPen(QPen(QColor(100, 100, 100), 1))
         
         self.title = QGraphicsTextItem(node_model.name, self)
         self.title.setDefaultTextColor(Qt.white)
@@ -214,24 +232,34 @@ class NodeItem(QGraphicsRectItem):
         self.setRect(0, 0, 150, self.expanded_height)
 
     def update_thumbnail(self):
-        if hasattr(self.node_model, '_cached_outputs') and self.node_model._cached_outputs is not None and 'Image Out' in self.node_model._cached_outputs:
-            import cv2
-            img = self.node_model._cached_outputs['Image Out']
-            if img is not None:
-                h, w = img.shape[:2]
-                rgba = cv2.cvtColor(img, cv2.COLOR_BGRA2RGBA)
-                qimg = QImage(rgba.data, w, h, 4*w, QImage.Format_RGBA8888)
-                pix = QPixmap.fromImage(qimg).scaled(100, 100, Qt.KeepAspectRatio, Qt.SmoothTransformation)
-                self.thumbnail.setPixmap(pix)
-                self.thumbnail.setPos(75 - pix.width()//2, self.collapsed_height)
-                self.expanded_height = self.collapsed_height + pix.height() + 10
-                if not self.is_collapsed:
-                    self.setRect(0, 0, 150, self.expanded_height)
+        if self.is_collapsed:
+            return
+        if not (hasattr(self.node_model, '_cached_outputs') and self.node_model._cached_outputs is not None
+                and 'Image Out' in self.node_model._cached_outputs):
+            return
+        import cv2
+        img = self.node_model._cached_outputs['Image Out']
+        if img is not None:
+            h, w = img.shape[:2]
+            thumb_max = 128
+            scale = thumb_max / max(h, w, 1)
+            if scale < 1.0:
+                nw, nh = max(1, int(w * scale)), max(1, int(h * scale))
+                small = cv2.resize(img, (nw, nh), interpolation=cv2.INTER_AREA)
             else:
-                self.thumbnail.setPixmap(QPixmap())
-                self.expanded_height = self.collapsed_height
-                if not self.is_collapsed:
-                    self.setRect(0, 0, 150, self.expanded_height)
+                small = img
+            sh, sw = small.shape[:2]
+            rgba = cv2.cvtColor(small, cv2.COLOR_BGRA2RGBA)
+            qimg = QImage(rgba.data, sw, sh, 4 * sw, QImage.Format_RGBA8888).copy()
+            pix = QPixmap.fromImage(qimg).scaled(100, 100, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+            self.thumbnail.setPixmap(pix)
+            self.thumbnail.setPos(75 - pix.width() // 2, self.collapsed_height)
+            self.expanded_height = self.collapsed_height + pix.height() + 10
+            self.setRect(0, 0, 150, self.expanded_height)
+        else:
+            self.thumbnail.setPixmap(QPixmap())
+            self.expanded_height = self.collapsed_height
+            self.setRect(0, 0, 150, self.expanded_height)
 
     def mouseDoubleClickEvent(self, event):
         self.is_collapsed = not self.is_collapsed

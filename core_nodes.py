@@ -272,14 +272,24 @@ class BrightnessContrastNode(EffectNode):
         return result
 
 class InvertNode(EffectNode):
+    """負片效果：反轉 RGB 顏色"""
     def __init__(self):
         super().__init__()
         self.name = "負片 (Invert)"
 
     def apply_effect(self, image):
-        result = image.copy()
-        result[:,:,:3] = 255 - image[:,:,:3]
-        return result
+        res_rgb = 255 - image[:,:,:3]
+        return np.dstack([res_rgb, image[:,:,3]])
+
+class MaskInvertNode(EffectNode):
+    """反向選取：反轉 Alpha 通道"""
+    def __init__(self):
+        super().__init__()
+        self.name = "反向選取 (Mask Invert)"
+
+    def apply_effect(self, image):
+        res_alpha = 255 - image[:,:,3]
+        return np.dstack([image[:,:,:3], res_alpha])
 
 class BlendNode(Node):
     def __init__(self):
@@ -331,11 +341,11 @@ class SwitcherNode(Node):
         self.add_input("In 2")
         self.add_input("In 3")
         self.add_output("Image Out")
-        self.params["interval_s"] = 2
+        self.params["interval_s"] = 0.5
         self.current_idx = 0
         import time
         self.last_switch = time.time()
-        self.param_meta["interval_s"] = {"min": 1, "max": 60}
+        self.param_meta["interval_s"] = {"min": 0.0, "max": 2.0, "step": 0.1, "decimals": 2}
 
     def advance_if_due(self) -> bool:
         """由主視窗計時器呼叫：僅在間隔到期時切換索引並標記 dirty。"""
