@@ -118,13 +118,13 @@ class ConnectionItem(QGraphicsPathItem):
         painter.setPen(pen)
         painter.drawPath(self.path())
 
-    def remove(self):
+    def remove(self, lock_graph=True):
         scene = self.scene()
         win = None
         if scene and scene.views():
             win = getattr(scene.views()[0], "main_window", None)
         locker = None
-        if win and hasattr(win, "_graph_evaluator") and win._graph_evaluator:
+        if lock_graph and win and hasattr(win, "_graph_evaluator") and win._graph_evaluator:
             locker = QMutexLocker(win._graph_evaluator.mutex)
 
         if self.out_pin_item:
@@ -347,7 +347,9 @@ class NodeItem(QGraphicsRectItem):
 
         for pin_item in self.pin_items.values():
             for conn in list(pin_item.connections):
-                conn.remove()
+                conn.remove(lock_graph=False)
+        if win and getattr(win, "output_node", None) is self.node_model:
+            win.output_node = None
         if self.scene():
             if hasattr(self.scene(), "graph"):
                 self.scene().graph.remove_node(self.node_model)
@@ -571,6 +573,8 @@ class GraphScene(QGraphicsScene):
             if has_changes:
                 self.graph_structure_changed.emit()
                 self.graph_state_changed.emit()
+            event.accept()
+            return
         super().keyPressEvent(event)
 
     def mousePressEvent(self, event):

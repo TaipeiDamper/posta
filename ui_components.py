@@ -4,6 +4,8 @@ from PySide6.QtWidgets import *
 from PySide6.QtGui import *
 from PySide6.QtCore import *
 
+from image_importer import mime_has_importable_image
+
 class ImagePreviewLabel(QWidget):
     def __init__(self, text=""):
         super().__init__()
@@ -271,15 +273,25 @@ class CanvasView(QGraphicsView):
         super().mouseReleaseEvent(event)
 
     def dragEnterEvent(self, event):
-        if event.mimeData().hasText():
+        mime_data = event.mimeData()
+        if mime_has_importable_image(mime_data) or (mime_data.hasText() and not mime_data.hasUrls()):
             event.acceptProposedAction()
 
     def dragMoveEvent(self, event):
-        if event.mimeData().hasText():
+        mime_data = event.mimeData()
+        if mime_has_importable_image(mime_data) or (mime_data.hasText() and not mime_data.hasUrls()):
             event.acceptProposedAction()
 
     def dropEvent(self, event):
-        name = event.mimeData().text()
+        mime_data = event.mimeData()
+        if mime_has_importable_image(mime_data):
+            if self.main_window.import_dropped_images(mime_data):
+                event.acceptProposedAction()
+            return
+        if mime_data.hasUrls():
+            return
+
+        name = mime_data.text()
         pos = self.mapToScene(event.position().toPoint())
         self.main_window.add_node_by_name(name, pos)
         event.acceptProposedAction()

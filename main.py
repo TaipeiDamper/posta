@@ -1,8 +1,6 @@
 import sys
 import traceback
 
-import cv2
-import numpy as np
 from PySide6.QtWidgets import *
 from PySide6.QtGui import *
 from PySide6.QtCore import *
@@ -17,10 +15,9 @@ from graph_restore import GraphRestoreContext, restore_graph_state, bind_restore
 from image_io import (
     normalize_to_bgra,
     bgra_to_qpixmap,
-    clipboard_rgba_to_bgra,
-    align_image_to_base,
     copy_bgra_to_clipboard,
 )
+from image_importer import ImageImportManager, mime_has_importable_image
 from history import HistoryManager
 from graph_evaluator import GraphEvaluator
 from ui_components import ImagePreviewLabel, ConfigPanel, PaletteList, CanvasView, SearchMenu
@@ -46,6 +43,7 @@ class MainWindow(QMainWindow):
 
         self._graph_evaluator = GraphEvaluator(self.graph, self)
         self._graph_evaluator.evaluation_done.connect(self._on_background_eval_done)
+        self._image_importer = ImageImportManager(self)
 
         self._history = HistoryManager(
             lambda: get_graph_state(self.graph, self.scene),
@@ -58,6 +56,7 @@ class MainWindow(QMainWindow):
 
         self.setup_ui()
         self.setup_menu()
+        self.setAcceptDrops(True)
 
         self.scene.graph_structure_changed.connect(
             lambda: self.schedule_evaluate(immediate=True))
@@ -220,63 +219,31 @@ class MainWindow(QMainWindow):
                 item.node_model.set_external_image_source(lambda: self.global_input_image)
 
     def load_original_image(self, event):
-        fname, _ = QFileDialog.getOpenFileName(self, "開啟原圖", "", "Image Files (*.png *.jpg *.bmp)")
-        if fname:
-            try:
-                img = cv2.imdecode(np.fromfile(fname, dtype=np.uint8), cv2.IMREAD_UNCHANGED)
-            except Exception:
-                img = None
-            if img is None:
-                self.statusBar().showMessage("無法讀取影像檔案", 3000)
-                return
-            self.set_global_image(img)
+        self._image_importer.load_original_from_dialog(self)
 
     def paste_image(self):
-        # 若焦點在文字輸入控件上，將貼上動作轉交給該控件
-        focus = QApplication.focusWidget()
-        if isinstance(focus, (QLineEdit, QTextEdit, QPlainTextEdit)):
-            focus.paste()
+        self._image_importer.paste_from_clipboard()
+
+    def import_dropped_images(self, mime_data):
+        return self._image_importer.import_from_mime(mime_data)
+
+    def dragEnterEvent(self, event):
+        if mime_has_importable_image(event.mimeData()):
+            event.acceptProposedAction()
             return
-        if isinstance(focus, QSpinBox):
-            if focus.lineEdit():
-                focus.lineEdit().paste()
+        super().dragEnterEvent(event)
+
+    def dragMoveEvent(self, event):
+        if mime_has_importable_image(event.mimeData()):
+            event.acceptProposedAction()
             return
+        super().dragMoveEvent(event)
 
-        clipboard = QApplication.clipboard()
-        if not clipboard.mimeData().hasImage():
+    def dropEvent(self, event):
+        if self.import_dropped_images(event.mimeData()):
+            event.acceptProposedAction()
             return
-        
-        locker = QMutexLocker(self._graph_evaluator.mutex)
-        try:
-            new_img, w, h = clipboard_rgba_to_bgra(clipboard.image())
-            if new_img is None:
-                return
-            if self.base_size is None:
-                self.base_size = (w, h)
-            processed_img, _ = align_image_to_base(new_img, self.base_size)
-
-            img_idx = len(self.input_images)
-            self.input_images.append(processed_img)
-
-            n_item = None
-            if img_idx == 0:
-                for item in self.scene.items():
-                    if isinstance(item, NodeItem) and isinstance(item.node_model, ImageInputNode):
-                        n_item = item
-                        break
-            if not n_item:
-                n_item = self.add_node_by_name("輸入 (Input)")
-            if n_item:
-                n_item.node_model.set_external_image_source(
-                    lambda idx=img_idx: self.input_images[idx])
-
-            self.global_input_image = processed_img
-            self.original_img_label.set_image(bgra_to_qpixmap(processed_img))
-            self.graph.mark_all_dirty()
-            self.schedule_evaluate(immediate=True)
-        except Exception as e:
-            traceback.print_exc()
-            print(f"貼上圖片失敗: {e}")
+        super().dropEvent(event)
 
     def select_node(self, node):
         if node is None:
@@ -300,26 +267,26 @@ class MainWindow(QMainWindow):
         img = normalize_to_bgra(img)
         if img is None:
             return
-        locker = QMutexLocker(self._graph_evaluator.mutex)
-        self.global_input_image = img.copy()
-        h, w = self.global_input_image.shape[:2]
-        self.base_size = (w, h)
-        if self.input_images:
-            self.input_images[0] = self.global_input_image
-        else:
-            self.input_images = [self.global_input_image]
-        self._sync_input_nodes_to_global()
+        with QMutexLocker(self._graph_evaluator.mutex):
+            self.global_input_image = img.copy()
+            h, w = self.global_input_image.shape[:2]
+            self.base_size = (w, h)
+            if self.input_images:
+                self.input_images[0] = self.global_input_image
+            else:
+                self.input_images = [self.global_input_image]
+            self._sync_input_nodes_to_global()
+            self.graph.mark_all_dirty()
         self.original_img_label.set_image(bgra_to_qpixmap(self.global_input_image))
-        self.graph.mark_all_dirty()
         self.schedule_evaluate(immediate=True)
 
     def clear_input_image(self):
-        locker = QMutexLocker(self._graph_evaluator.mutex)
-        self.global_input_image = None
+        with QMutexLocker(self._graph_evaluator.mutex):
+            self.global_input_image = None
+            self.graph.mark_all_dirty()
         self.original_img_label.clear_image()
         self.original_img_label.text = "原圖(貼上/點擊載入)"
         self.original_img_label.update()
-        self.graph.mark_all_dirty()
         self.schedule_evaluate(immediate=True)
 
     def save_output_image(self):
