@@ -83,6 +83,7 @@ class Node:
         self._last_params_hash = None # 用於偵測參數變動
         self.bypassed = False         # 節點層級的 bypass 開關
         self.param_meta = {}        # 參數 UI 範圍等元資料，子類可覆寫或填入
+        self.graph = None           # 綁定隸屬的圖物件
 
     def add_input(self, name: str, pin_type: str = "image"):
         self.inputs[name] = InputPin(self, name, pin_type)
@@ -217,10 +218,12 @@ class Graph:
         self.proxy_scale = 1.0  # 1.0 = 全解析度, 0.5 = 半解析度
 
     def add_node(self, node: Node):
+        node.graph = self
         self.nodes.append(node)
 
     def remove_node(self, node: Node):
         if node in self.nodes:
+            node.graph = None
             for pin in node.inputs.values():
                 pin.disconnect_all()
             for other_node in self.nodes:

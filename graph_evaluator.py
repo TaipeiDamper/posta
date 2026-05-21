@@ -30,7 +30,7 @@ class GraphEvaluator(QObject):
         self._revision = 0
         self._pending_revision = 0
         self._worker = None
-        self._use_background = False
+        self._use_background = True
 
     def set_use_background(self, enabled: bool):
         self._use_background = bool(enabled)

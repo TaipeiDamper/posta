@@ -2,6 +2,7 @@ import sys
 import traceback
 
 import cv2
+import numpy as np
 from PySide6.QtWidgets import *
 from PySide6.QtGui import *
 from PySide6.QtCore import *
@@ -221,7 +222,10 @@ class MainWindow(QMainWindow):
     def load_original_image(self, event):
         fname, _ = QFileDialog.getOpenFileName(self, "開啟原圖", "", "Image Files (*.png *.jpg *.bmp)")
         if fname:
-            img = cv2.imread(fname, cv2.IMREAD_UNCHANGED)
+            try:
+                img = cv2.imdecode(np.fromfile(fname, dtype=np.uint8), cv2.IMREAD_UNCHANGED)
+            except Exception:
+                img = None
             if img is None:
                 self.statusBar().showMessage("無法讀取影像檔案", 3000)
                 return
@@ -241,6 +245,8 @@ class MainWindow(QMainWindow):
         clipboard = QApplication.clipboard()
         if not clipboard.mimeData().hasImage():
             return
+        
+        locker = QMutexLocker(self._graph_evaluator.mutex)
         try:
             new_img, w, h = clipboard_rgba_to_bgra(clipboard.image())
             if new_img is None:
@@ -294,6 +300,7 @@ class MainWindow(QMainWindow):
         img = normalize_to_bgra(img)
         if img is None:
             return
+        locker = QMutexLocker(self._graph_evaluator.mutex)
         self.global_input_image = img.copy()
         h, w = self.global_input_image.shape[:2]
         self.base_size = (w, h)
@@ -307,6 +314,7 @@ class MainWindow(QMainWindow):
         self.schedule_evaluate(immediate=True)
 
     def clear_input_image(self):
+        locker = QMutexLocker(self._graph_evaluator.mutex)
         self.global_input_image = None
         self.original_img_label.clear_image()
         self.original_img_label.text = "原圖(貼上/點擊載入)"
@@ -325,6 +333,7 @@ class MainWindow(QMainWindow):
         self.add_node_by_name(item.text())
 
     def add_node_by_name(self, name, pos=None):
+        locker = QMutexLocker(self._graph_evaluator.mutex)
         key = resolve_registry_key(name)
         if key is None:
             return None
@@ -432,6 +441,7 @@ class MainWindow(QMainWindow):
         self._history.redo()
 
     def _restore_graph_state(self, state):
+        locker = QMutexLocker(self._graph_evaluator.mutex)
         ctx = GraphRestoreContext(
             scene=self.scene,
             graph=self.graph,

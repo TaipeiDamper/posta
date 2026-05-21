@@ -94,6 +94,10 @@ class ConfigPanel(QWidget):
                     spin.setValue(float(val))
 
                     def on_float_changed(v, k=key):
+                        win = self.window()
+                        locker = None
+                        if win and hasattr(win, "_graph_evaluator") and win._graph_evaluator:
+                            locker = QMutexLocker(win._graph_evaluator.mutex)
                         self.node.params[k] = v
                         self.update_callback()
                     spin.valueChanged.connect(on_float_changed)
@@ -111,6 +115,10 @@ class ConfigPanel(QWidget):
                     spin.valueChanged.connect(slider.setValue)
 
                     def on_release(k=key, s=slider):
+                        win = self.window()
+                        locker = None
+                        if win and hasattr(win, "_graph_evaluator") and win._graph_evaluator:
+                            locker = QMutexLocker(win._graph_evaluator.mutex)
                         self.node.params[k] = s.value()
                         self.update_callback()
                         self.commit_param()
@@ -118,6 +126,10 @@ class ConfigPanel(QWidget):
 
                     def on_spin(v, k=key, s=slider):
                         if not s.isSliderDown():
+                            win = self.window()
+                            locker = None
+                            if win and hasattr(win, "_graph_evaluator") and win._graph_evaluator:
+                                locker = QMutexLocker(win._graph_evaluator.mutex)
                             self.node.params[k] = v
                             self.update_callback()
                     spin.valueChanged.connect(on_spin)
@@ -180,6 +192,10 @@ class ConfigPanel(QWidget):
         self.hist_label.setPixmap(QPixmap.fromImage(qimg.copy()))
 
     def update_param(self, key, val):
+        win = self.window()
+        locker = None
+        if win and hasattr(win, "_graph_evaluator") and win._graph_evaluator:
+            locker = QMutexLocker(win._graph_evaluator.mutex)
         self.node.params[key] = val
 
     def commit_param(self):
@@ -190,6 +206,10 @@ class ConfigPanel(QWidget):
         color = QColorDialog.getColor()
         if color.isValid():
             rgb = [color.red(), color.green(), color.blue()]
+            win = self.window()
+            locker = None
+            if win and hasattr(win, "_graph_evaluator") and win._graph_evaluator:
+                locker = QMutexLocker(win._graph_evaluator.mutex)
             self.node.params[key] = rgb
             btn.setStyleSheet(f"background-color: {color.name()}; color: black;")
             self.update_callback()

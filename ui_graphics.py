@@ -119,6 +119,14 @@ class ConnectionItem(QGraphicsPathItem):
         painter.drawPath(self.path())
 
     def remove(self):
+        scene = self.scene()
+        win = None
+        if scene and scene.views():
+            win = getattr(scene.views()[0], "main_window", None)
+        locker = None
+        if win and hasattr(win, "_graph_evaluator") and win._graph_evaluator:
+            locker = QMutexLocker(win._graph_evaluator.mutex)
+
         if self.out_pin_item:
             self.out_pin_item.remove_connection(self)
         if self.in_pin_item:
@@ -329,6 +337,14 @@ class NodeItem(QGraphicsRectItem):
         return super().itemChange(change, value)
 
     def remove(self):
+        scene = self.scene()
+        win = None
+        if scene and scene.views():
+            win = getattr(scene.views()[0], "main_window", None)
+        locker = None
+        if win and hasattr(win, "_graph_evaluator") and win._graph_evaluator:
+            locker = QMutexLocker(win._graph_evaluator.mutex)
+
         for pin_item in self.pin_items.values():
             for conn in list(pin_item.connections):
                 conn.remove()
@@ -579,6 +595,13 @@ class GraphScene(QGraphicsScene):
 
     def mouseReleaseEvent(self, event):
         if self.current_connection:
+            win = None
+            if self.views():
+                win = getattr(self.views()[0], "main_window", None)
+            locker = None
+            if win and hasattr(win, "_graph_evaluator") and win._graph_evaluator:
+                locker = QMutexLocker(win._graph_evaluator.mutex)
+
             self.clear_pin_drag_highlight()
             pos = event.scenePos()
             snap_pi = self.find_nearest_compatible_input_pin(

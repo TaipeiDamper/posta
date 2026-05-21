@@ -17,27 +17,35 @@ class ImageInputNode(Node):
         self._external_image_fn = fn
 
     def process(self, **kwargs):
+        img = None
         if self._external_image_fn is not None:
-            return {"Image Out": self._external_image_fn()}
-        path = self.params.get("image_path", "")
-        if not path:
-            return {"Image Out": None}
-            
-        if path != self._cached_path or self._cached_image is None:
-            try:
-                img = cv2.imread(path, cv2.IMREAD_UNCHANGED)
-                if img is not None:
-                    if len(img.shape) == 2:
-                        img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGRA)
-                    elif len(img.shape) == 3 and img.shape[2] == 3:
-                        img = cv2.cvtColor(img, cv2.COLOR_BGR2BGRA)
-                    self._cached_image = img
-                    self._cached_path = path
-                else:
-                    self._cached_image = None
-            except Exception:
-                self._cached_image = None
-        return {"Image Out": self._cached_image}
+            img = self._external_image_fn()
+        else:
+            path = self.params.get("image_path", "")
+            if path:
+                if path != self._cached_path or self._cached_image is None:
+                    try:
+                        read_img = cv2.imdecode(np.fromfile(path, dtype=np.uint8), cv2.IMREAD_UNCHANGED)
+                        if read_img is not None:
+                            if len(read_img.shape) == 2:
+                                read_img = cv2.cvtColor(read_img, cv2.COLOR_GRAY2BGRA)
+                            elif len(read_img.shape) == 3 and read_img.shape[2] == 3:
+                                read_img = cv2.cvtColor(read_img, cv2.COLOR_BGR2BGRA)
+                            self._cached_image = read_img
+                            self._cached_path = path
+                        else:
+                            self._cached_image = None
+                    except Exception:
+                        self._cached_image = None
+                img = self._cached_image
+
+        if img is not None:
+            scale = getattr(self.graph, "proxy_scale", 1.0) if self.graph else 1.0
+            if scale != 1.0:
+                h, w = img.shape[:2]
+                nw, nh = max(1, int(w * scale)), max(1, int(h * scale))
+                img = cv2.resize(img, (nw, nh), interpolation=cv2.INTER_AREA)
+        return {"Image Out": img}
 
 class EffectNode(Node):
     """
@@ -204,7 +212,7 @@ class MergeNode(Node):
         c_out = over_rgb + base_rgb * (1.0 - alpha_overlay_3)
         
         result = np.zeros_like(base)
-        result[:,:,:3] = np.where(alpha_out_3 > 0, c_out / alpha_out_3, 0).astype(np.uint8)
+        result[:,:,:3] = np.clip(np.where(alpha_out_3 > 0, c_out / alpha_out_3, 0), 0, 255).astype(np.uint8)
         result[:,:,3] = np.clip(alpha_out * 255.0, 0, 255).astype(np.uint8)
         return {"Image Out": result}
 
@@ -412,12 +420,6 @@ class TextNode(Node):
     def process(self, **kwargs):
         base = kwargs.get("Image In")
         
-        if base is not None:
-            result = base.copy()
-        else:
-            result = np.zeros((512, 512, 4), dtype=np.uint8)
-            result[:,:,3] = 255
-        
         text = str(self.params.get("text", "Hello"))
         scale = max(0.1, float(self.params.get("font_scale", 2)))
         thick = max(1, int(self.params.get("thickness", 3)))
@@ -426,7 +428,17 @@ class TextNode(Node):
         px = int(self.params.get("pos_x", 50))
         py = int(self.params.get("pos_y", 50))
         
-        cv2.putText(result, text, (px, py), cv2.FONT_HERSHEY_SIMPLEX, scale, bgr, thick, cv2.LINE_AA)
+        if base is not None:
+            result = base.copy()
+            cv2.putText(result, text, (px, py), cv2.FONT_HERSHEY_SIMPLEX, scale, bgr, thick, cv2.LINE_AA)
+        else:
+            result = np.zeros((512, 512, 4), dtype=np.uint8)
+            mask = np.zeros((512, 512), dtype=np.uint8)
+            cv2.putText(mask, text, (px, py), cv2.FONT_HERSHEY_SIMPLEX, scale, 255, thick, cv2.LINE_AA)
+            result[mask > 0, 0] = bgr[0]
+            result[mask > 0, 1] = bgr[1]
+            result[mask > 0, 2] = bgr[2]
+            result[:, :, 3] = mask
         
         return {"Image Out": result}
 
