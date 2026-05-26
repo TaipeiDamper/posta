@@ -180,14 +180,16 @@ class NodeItem(QGraphicsRectItem):
         name = node.__class__.__name__
         if "Input" in name or "Output" in name:
             return QColor(44, 62, 80) # 深藍
-        elif name in ("EdgeDetectNode", "SobelEdgeNode", "ThresholdContourNode", "PencilSketchNode", "BlurNode"):
+        elif name in ("EdgeDetectNode", "SobelEdgeNode", "ThresholdContourNode", "PencilSketchNode", "BlurNode", "HalftoneNode", "GrainNode"):
             return QColor(39, 174, 96) # 綠色 (濾鏡)
-        elif name in ("LumaNode", "MidtoneKeyNode", "BrightnessContrastNode", "InvertNode", "MaskInvertNode", "TintNode", "ColorReplaceNode", "PosterizeNode", "GradientMapNode"):
+        elif name in ("LuminanceNode", "MidtoneKeyNode", "BrightnessContrastNode", "InvertNode", "MaskInvertNode", "TintNode", "ColorReplaceNode", "PosterizeNode", "GradientMapNode"):
             return QColor(211, 84, 0)  # 橘色 (顏色)
         elif name in ("MergeNode", "BlendNode", "SwitcherNode"):
             return QColor(41, 128, 185) # 青藍 (合成)
         elif name in ("TextNode", "SmartCropNode"):
             return QColor(142, 68, 173) # 紫色 (變形/文字)
+        elif name in ("ValueNode", "ColorOutputNode", "RerouteNode"):
+            return QColor(70, 70, 70)   # 灰黑色 (工具/輔助)
         return QColor(50, 50, 50)     # 預設深灰
 
     def __init__(self, node_model, scene=None):

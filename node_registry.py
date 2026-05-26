@@ -28,6 +28,7 @@ from core_nodes import (
     GradientMapNode,
     HalftoneNode,
     GrainNode,
+    MaskInvertNode,
 )
 
 NODE_MAP = {
@@ -43,6 +44,7 @@ NODE_MAP = {
     "Sketch": ("鉛筆素描", PencilSketchNode),
     "Brightness": ("亮度對比", BrightnessContrastNode),
     "Invert": ("負片", InvertNode),
+    "Mask Invert": ("反向選取", MaskInvertNode),
     "Posterize": ("色階分離", PosterizeNode),
     "Grad Map": ("漸層對映", GradientMapNode),
     "Blur": ("高斯模糊", BlurNode),
@@ -85,6 +87,13 @@ def resolve_registry_key(name):
         key = DISPLAY_NAME_TO_KEY.get(name)
         if key:
             return key
+        import re
+        # 優先嘗試提取括號內部的英文 Key
+        match = re.search(r'\(([^)]+)\)', name)
+        if match:
+            k = match.group(1).strip()
+            if k in NODE_MAP:
+                return k
         for nk in NODE_MAP:
             if nk in name:
                 return nk

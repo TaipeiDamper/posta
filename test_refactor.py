@@ -83,8 +83,52 @@ def test_text_node_transparent_bg():
     assert max_red == 255 and min_blue == 0 and min_green == 0, f"Expected red color text, got sample colors: {text_pixel_colors[0]}"
     print("TextNode transparent background test passed!")
 
+def test_mask_invert_node_registry():
+    print("Testing MaskInvertNode registry and resolve_key...")
+    from node_registry import resolve_registry_key, NODE_MAP
+    # 測試括號解析邏輯是否能正確定位 Key
+    key = resolve_registry_key("反向選取 (Mask Invert)")
+    assert key == "Mask Invert", f"Expected 'Mask Invert', got {key}"
+    display_name, cls = NODE_MAP[key]
+    assert cls.__name__ == "MaskInvertNode", f"Expected MaskInvertNode, got {cls.__name__}"
+    print("MaskInvertNode registry test passed!")
+
+def test_clear_input_state():
+    print("Testing clear_input_image state clean...")
+    # 模擬 MainWindow 清除狀態
+    from main import MainWindow
+    from PySide6.QtWidgets import QApplication
+    import sys
+    
+    app = QApplication.instance() or QApplication(sys.argv)
+    win = MainWindow()
+    
+    # 模擬匯入一張測試圖
+    dummy_img = np.ones((100, 100, 4), dtype=np.uint8) * 128
+    win.set_global_image(dummy_img)
+    
+    assert win.global_input_image is not None
+    assert len(win.input_images) > 0
+    assert win.base_size == (100, 100)
+    
+    # 模擬點擊清除
+    win.clear_input_image()
+    
+    assert win.global_input_image is None
+    assert len(win.input_images) == 0
+    assert win.base_size is None
+    
+    # 停用計時器並安全刪除以防止 GC 崩潰
+    win.timer.stop()
+    win._eval_timer.stop()
+    win.deleteLater()
+    
+    print("clear_input_image state clean test passed!")
+
 if __name__ == "__main__":
     test_proxy_scale()
     test_merge_node_overflow()
     test_text_node_transparent_bg()
+    test_mask_invert_node_registry()
+    test_clear_input_state()
     print("All tests passed successfully!")

@@ -64,6 +64,15 @@ def image_data_to_bgra(image_data):
     return img
 
 
+def safe_get_input_image(window, idx):
+    try:
+        if window and idx < len(window.input_images):
+            return window.input_images[idx]
+    except Exception:
+        pass
+    return None
+
+
 class ImageImportManager:
     """把匯入副作用集中在這裡，MainWindow 僅負責 UI 事件轉接。"""
 
@@ -154,7 +163,7 @@ class ImageImportManager:
             with QMutexLocker(self.window._graph_evaluator.mutex):
                 if n_item:
                     n_item.node_model.set_external_image_source(
-                        lambda idx=img_idx: self.window.input_images[idx]
+                        lambda idx=img_idx: safe_get_input_image(self.window, idx)
                     )
                 self.window.global_input_image = processed_img
                 self.window.graph.mark_all_dirty()

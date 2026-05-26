@@ -283,6 +283,8 @@ class MainWindow(QMainWindow):
     def clear_input_image(self):
         with QMutexLocker(self._graph_evaluator.mutex):
             self.global_input_image = None
+            self.input_images.clear()
+            self.base_size = None
             self.graph.mark_all_dirty()
         self.original_img_label.clear_image()
         self.original_img_label.text = "原圖(貼上/點擊載入)"
