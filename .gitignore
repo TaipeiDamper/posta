@@ -1,0 +1,4 @@
+__pycache__/
+*.py[cod]
+*.pyo
+run_output.log

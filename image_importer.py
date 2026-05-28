@@ -5,7 +5,6 @@ import traceback
 
 import cv2
 import numpy as np
-from PySide6.QtCore import QMutexLocker
 from PySide6.QtGui import QImage, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
@@ -17,7 +16,7 @@ from PySide6.QtWidgets import (
 )
 
 from core_nodes import ImageInputNode
-from image_io import align_image_to_base, bgra_to_qpixmap, clipboard_rgba_to_bgra, normalize_to_bgra
+from image_io import bgra_to_qpixmap, clipboard_rgba_to_bgra, normalize_to_bgra
 from ui_graphics import NodeItem
 
 
@@ -64,20 +63,26 @@ def image_data_to_bgra(image_data):
     return img
 
 
-def safe_get_input_image(window, idx):
-    try:
-        if window and idx < len(window.input_images):
-            return window.input_images[idx]
-    except Exception:
-        pass
-    return None
-
-
 class ImageImportManager:
     """把匯入副作用集中在這裡，MainWindow 僅負責 UI 事件轉接。"""
 
-    def __init__(self, window):
-        self.window = window
+    def __init__(
+        self,
+        input_session,
+        scene,
+        graph,
+        add_node,
+        set_preview_image,
+        request_evaluate,
+        show_status,
+    ):
+        self.input_session = input_session
+        self.scene = scene
+        self.graph = graph
+        self.add_node = add_node
+        self.set_preview_image = set_preview_image
+        self.request_evaluate = request_evaluate
+        self.show_status = show_status
 
     def load_original_from_dialog(self, parent):
         fname, _ = QFileDialog.getOpenFileName(
@@ -94,7 +99,7 @@ class ImageImportManager:
             self._show_status("無法讀取影像檔案")
             return False
 
-        self.window.set_global_image(img)
+        self.set_global_image(img)
         self._show_status(f"已載入原圖：{os.path.basename(fname)}", 2000)
         return True
 
@@ -144,32 +149,24 @@ class ImageImportManager:
             return False
 
         try:
-            with QMutexLocker(self.window._graph_evaluator.mutex):
-                h, w = new_img.shape[:2]
-                if self.window.base_size is None:
-                    self.window.base_size = (w, h)
-                processed_img, _ = align_image_to_base(new_img, self.window.base_size)
-
-                img_idx = len(self.window.input_images)
-                self.window.input_images.append(processed_img)
-
+            with self.scene.graph_lock():
+                img_idx, processed_img = self.input_session.append_import_image(new_img)
+                if processed_img is None:
+                    return False
                 n_item = None
                 if img_idx == 0:
                     n_item = self._first_input_node_item()
 
             if not n_item:
-                n_item = self.window.add_node_by_name("輸入 (Input)")
+                n_item = self.add_node("輸入 (Input)")
 
-            with QMutexLocker(self.window._graph_evaluator.mutex):
+            with self.scene.graph_lock():
                 if n_item:
-                    n_item.node_model.set_external_image_source(
-                        lambda idx=img_idx: safe_get_input_image(self.window, idx)
-                    )
-                self.window.global_input_image = processed_img
-                self.window.graph.mark_all_dirty()
+                    self.input_session.bind_node_to_index(n_item.node_model, img_idx)
+                self.graph.mark_all_dirty()
 
-            self.window.original_img_label.set_image(bgra_to_qpixmap(processed_img))
-            self.window.schedule_evaluate(immediate=True)
+            self.set_preview_image(bgra_to_qpixmap(processed_img))
+            self.request_evaluate()
         except Exception as exc:
             traceback.print_exc()
             print(f"圖片匯入失敗: {exc}")
@@ -179,14 +176,42 @@ class ImageImportManager:
             self._show_status(f"已匯入影像：{source_label}", 2000)
         return True
 
+    def set_global_image(self, img):
+        try:
+            with self.scene.graph_lock():
+                global_img = self.input_session.set_global_image(img)
+                if global_img is None:
+                    return False
+                self._sync_input_nodes_to_global()
+                self.graph.mark_all_dirty()
+
+            self.set_preview_image(bgra_to_qpixmap(global_img))
+            self.request_evaluate()
+            return True
+        except Exception as exc:
+            traceback.print_exc()
+            print(f"設定原圖失敗: {exc}")
+            return False
+
+    def clear_input_image(self):
+        with self.scene.graph_lock():
+            self.input_session.clear()
+            self.graph.mark_all_dirty()
+        self.request_evaluate()
+
     def _first_input_node_item(self):
-        for item in self.window.scene.items():
+        for item in self.scene.items():
             if isinstance(item, NodeItem) and isinstance(item.node_model, ImageInputNode):
                 return item
         return None
 
+    def _sync_input_nodes_to_global(self):
+        for item in self.scene.items():
+            if isinstance(item, NodeItem) and isinstance(item.node_model, ImageInputNode):
+                self.input_session.bind_node_to_global(item.node_model)
+
     def _show_status(self, message, timeout=3000):
-        self.window.statusBar().showMessage(message, timeout)
+        self.show_status(message, timeout)
 
     def _paste_into_focused_text_widget(self):
         focus = QApplication.focusWidget()

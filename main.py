@@ -6,21 +6,23 @@ from PySide6.QtGui import *
 from PySide6.QtCore import *
 
 from core_engine import Graph
-from core_nodes import ImageInputNode, SwitcherNode
+from core_nodes import SwitcherNode
 from ui_graphics import GraphScene, NodeItem
 
-from node_registry import NODE_MAP, PALETTE_CATEGORIES, resolve_registry_key
+from node_registry import NODE_MAP, PALETTE_CATEGORIES
 from graph_state import get_graph_state, dump_json, load_json
-from graph_restore import GraphRestoreContext, restore_graph_state, bind_restore_node_press
+from graph_restore import GraphRestoreContext, restore_graph_state
 from image_io import (
-    normalize_to_bgra,
     bgra_to_qpixmap,
     copy_bgra_to_clipboard,
 )
 from image_importer import ImageImportManager, mime_has_importable_image
+from input_session import InputSession
+from graph_controller import GraphSceneController
 from history import HistoryManager
 from graph_evaluator import GraphEvaluator
-from ui_components import ImagePreviewLabel, ConfigPanel, PaletteList, CanvasView, SearchMenu
+from node_factory import NodeFactory, bind_node_item_events
+from ui_components import ImagePreviewLabel, ConfigPanel, PaletteList, CanvasView
 
 
 class MainWindow(QMainWindow):
@@ -32,21 +34,32 @@ class MainWindow(QMainWindow):
         self.resize(1400, 900)
 
         self.graph = Graph()
-        self.input_images = []
-        self.base_size = None
         self.output_node = None
-        self.global_input_image = None
-
-        self.scene = GraphScene(self.graph)
-        self.view = CanvasView(self.scene, self, NODE_MAP)
-        self.view.main_window = self
+        self.input_session = InputSession()
 
         self._graph_evaluator = GraphEvaluator(self.graph, self)
         self._graph_evaluator.evaluation_done.connect(self._on_background_eval_done)
-        self._image_importer = ImageImportManager(self)
+
+        self._scene_controller = GraphSceneController(
+            mutex=self._graph_evaluator.mutex,
+            on_node_removed=self._on_scene_node_removed,
+        )
+        self.scene = GraphScene(self.graph, controller=self._scene_controller)
+        self.view = CanvasView(self.scene, self, NODE_MAP)
+
+        self._node_factory = NodeFactory(
+            graph=self.graph,
+            scene=self.scene,
+            view=self.view,
+            input_session=self.input_session,
+            set_output_node=self._set_output_node,
+            on_select_node=self.select_node,
+            on_commit_state=self.save_state,
+            is_restoring=lambda: self.is_restoring,
+        )
 
         self._history = HistoryManager(
-            lambda: get_graph_state(self.graph, self.scene),
+            lambda: get_graph_state(self.graph, self._scene_node_positions()),
             self._restore_graph_state,
         )
 
@@ -57,6 +70,15 @@ class MainWindow(QMainWindow):
         self.setup_ui()
         self.setup_menu()
         self.setAcceptDrops(True)
+        self._image_importer = ImageImportManager(
+            input_session=self.input_session,
+            scene=self.scene,
+            graph=self.graph,
+            add_node=self.add_node_by_name,
+            set_preview_image=self.original_img_label.set_image,
+            request_evaluate=lambda: self.schedule_evaluate(immediate=True),
+            show_status=lambda msg, timeout=3000: self.statusBar().showMessage(msg, timeout),
+        )
 
         self.scene.graph_structure_changed.connect(
             lambda: self.schedule_evaluate(immediate=True))
@@ -88,6 +110,22 @@ class MainWindow(QMainWindow):
     @property
     def is_restoring(self):
         return self._history.is_restoring
+
+    @property
+    def global_input_image(self):
+        return self.input_session.global_image
+
+    @global_input_image.setter
+    def global_input_image(self, value):
+        self.input_session.global_image = value
+
+    @property
+    def input_images(self):
+        return self.input_session.images
+
+    @property
+    def base_size(self):
+        return self.input_session.base_size
 
     def setup_menu(self):
         menubar = self.menuBar()
@@ -213,10 +251,19 @@ class MainWindow(QMainWindow):
             return
         self._apply_evaluate_ui()
 
-    def _sync_input_nodes_to_global(self):
-        for item in self.scene.items():
-            if isinstance(item, NodeItem) and isinstance(item.node_model, ImageInputNode):
-                item.node_model.set_external_image_source(lambda: self.global_input_image)
+    def _set_output_node(self, node):
+        self.output_node = node
+
+    def _on_scene_node_removed(self, node):
+        if self.output_node is node:
+            self.output_node = None
+
+    def _scene_node_positions(self):
+        return {
+            item.node_model.id: (item.scenePos().x(), item.scenePos().y())
+            for item in self.scene.items()
+            if isinstance(item, NodeItem)
+        }
 
     def load_original_image(self, event):
         self._image_importer.load_original_from_dialog(self)
@@ -262,34 +309,13 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage("尚未產生輸出", 2000)
 
     def set_global_image(self, img):
-        if img is None:
-            return
-        img = normalize_to_bgra(img)
-        if img is None:
-            return
-        with QMutexLocker(self._graph_evaluator.mutex):
-            self.global_input_image = img.copy()
-            h, w = self.global_input_image.shape[:2]
-            self.base_size = (w, h)
-            if self.input_images:
-                self.input_images[0] = self.global_input_image
-            else:
-                self.input_images = [self.global_input_image]
-            self._sync_input_nodes_to_global()
-            self.graph.mark_all_dirty()
-        self.original_img_label.set_image(bgra_to_qpixmap(self.global_input_image))
-        self.schedule_evaluate(immediate=True)
+        self._image_importer.set_global_image(img)
 
     def clear_input_image(self):
-        with QMutexLocker(self._graph_evaluator.mutex):
-            self.global_input_image = None
-            self.input_images.clear()
-            self.base_size = None
-            self.graph.mark_all_dirty()
+        self._image_importer.clear_input_image()
         self.original_img_label.clear_image()
         self.original_img_label.text = "原圖(貼上/點擊載入)"
         self.original_img_label.update()
-        self.schedule_evaluate(immediate=True)
 
     def save_output_image(self):
         if not self.preview_label.pixmap_original or self.preview_label.pixmap_original.isNull():
@@ -302,44 +328,7 @@ class MainWindow(QMainWindow):
         self.add_node_by_name(item.text())
 
     def add_node_by_name(self, name, pos=None):
-        locker = QMutexLocker(self._graph_evaluator.mutex)
-        key = resolve_registry_key(name)
-        if key is None:
-            return None
-        display_name, cls = NODE_MAP[key]
-        node = cls()
-        if key == "Input":
-            node.set_external_image_source(lambda: self.global_input_image)
-        elif key == "Output":
-            self.output_node = node
-        node.name = display_name
-
-        self.graph.add_node(node)
-        n_item = NodeItem(node)
-        self.scene.add_node(n_item)
-
-        if pos:
-            n_item.setPos(pos)
-        else:
-            center = self.view.mapToScene(self.view.viewport().rect().center())
-            off = (len(self.graph.nodes) % 10) * 20
-            n_item.setPos(center.x() - 75 + off, center.y() - 50 + off)
-
-        def on_press(event, ni=n_item):
-            QGraphicsRectItem.mousePressEvent(ni, event)
-            self.select_node(ni.node_model)
-
-        def on_release(event, ni=n_item):
-            QGraphicsRectItem.mouseReleaseEvent(ni, event)
-            if not self.is_restoring:
-                self.save_state()
-
-        n_item.mousePressEvent = on_press
-        n_item.mouseReleaseEvent = on_release
-
-        if not self.is_restoring:
-            self.save_state()
-        return n_item
+        return self._node_factory.create_by_name(name, pos)
 
     def on_timer_tick(self):
         any_switch = False
@@ -356,9 +345,6 @@ class MainWindow(QMainWindow):
             self.timer.setInterval(target_interval)
         if any_switch:
             self.schedule_evaluate(immediate=True)
-
-    def show_config(self, node):
-        self.config_area.setWidget(ConfigPanel(node, self.schedule_evaluate))
 
     def toggle_proxy(self, checked):
         self.graph.proxy_scale = 0.5 if checked else 1.0
@@ -410,21 +396,22 @@ class MainWindow(QMainWindow):
         self._history.redo()
 
     def _restore_graph_state(self, state):
-        locker = QMutexLocker(self._graph_evaluator.mutex)
-        ctx = GraphRestoreContext(
-            scene=self.scene,
-            graph=self.graph,
-            get_global_input_image=lambda: self.global_input_image,
-            set_output_node=lambda n: setattr(self, "output_node", n),
-            on_node_item_created=lambda ni, nm: bind_restore_node_press(
-                ni, nm, self.show_config),
-            clear_config_panel=lambda: self.config_area.setWidget(QWidget()),
-            on_evaluate=lambda: self.schedule_evaluate(immediate=True),
-        )
-        restore_graph_state(state, ctx)
+        with QMutexLocker(self._graph_evaluator.mutex):
+            ctx = GraphRestoreContext(
+                scene=self.scene,
+                graph=self.graph,
+                get_global_input_image=self.input_session.get_global_image,
+                set_output_node=self._set_output_node,
+                on_node_item_created=lambda ni, nm: bind_node_item_events(
+                    ni, self.select_node, self.save_state, lambda: self.is_restoring),
+                clear_config_panel=lambda: self.config_area.setWidget(QWidget()),
+                on_evaluate=lambda: None,
+            )
+            restore_graph_state(state, ctx)
+        self.schedule_evaluate(immediate=True)
 
     def export_template(self):
-        state = get_graph_state(self.graph, self.scene)
+        state = get_graph_state(self.graph, self._scene_node_positions())
         fname, _ = QFileDialog.getSaveFileName(self, "匯出範本", "", "JSON Files (*.json)")
         if fname:
             dump_json(fname, state)

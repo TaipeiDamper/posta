@@ -281,26 +281,3 @@ class Graph:
                 print(f"!!! 節點運算崩潰 !!!\n節點: {getattr(node, 'name', 'Unknown')}\n型別: {node.__class__.__name__}\n原因: {e}\n詳情:\n{error_detail}")
                 node._status = "error"
                 node._error_message = str(e)
-
-    def to_json(self):
-        """匯出圖表為可序列化的字典。"""
-        data = {"nodes": [], "edges": []}
-        for node in self.nodes:
-            data["nodes"].append({
-                "id": node.id,
-                "type": node.__class__.__name__,
-                "name": node.name,
-                "params": dict(node.params),
-                "bypassed": node.bypassed,
-            })
-            for pin_name, in_pin in node.inputs.items():
-                for edge in in_pin.edges:
-                    data["edges"].append({
-                        "out_node": edge.output_pin.node.id,
-                        "out_pin": edge.output_pin.name,
-                        "in_node": node.id,
-                        "in_pin": pin_name,
-                        "weight": edge.weight,
-                        "bypassed": edge.bypassed,
-                    })
-        return data

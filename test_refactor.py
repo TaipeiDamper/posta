@@ -93,6 +93,20 @@ def test_mask_invert_node_registry():
     assert cls.__name__ == "MaskInvertNode", f"Expected MaskInvertNode, got {cls.__name__}"
     print("MaskInvertNode registry test passed!")
 
+def test_mask_invert_node_mask_io():
+    print("Testing MaskInvertNode mask input/output...")
+    from core_nodes import MaskInvertNode
+
+    node = MaskInvertNode()
+    assert node.inputs["Mask In"].pin_type == "mask"
+    assert node.outputs["Mask Out"].pin_type == "mask"
+
+    mask = np.array([[0, 64], [128, 255]], dtype=np.uint8)
+    result = node.process(**{"Mask In": mask})["Mask Out"]
+    expected = np.array([[255, 191], [127, 0]], dtype=np.uint8)
+    assert np.array_equal(result, expected), f"Expected inverted mask {expected}, got {result}"
+    print("MaskInvertNode mask I/O test passed!")
+
 def test_clear_input_state():
     print("Testing clear_input_image state clean...")
     # 模擬 MainWindow 清除狀態
@@ -130,5 +144,6 @@ if __name__ == "__main__":
     test_merge_node_overflow()
     test_text_node_transparent_bg()
     test_mask_invert_node_registry()
+    test_mask_invert_node_mask_io()
     test_clear_input_state()
     print("All tests passed successfully!")

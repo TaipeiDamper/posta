@@ -3,8 +3,6 @@
 from dataclasses import dataclass
 from typing import Any, Callable
 
-from PySide6.QtWidgets import QGraphicsRectItem
-
 from node_registry import CLASS_BY_TYPENAME
 from ui_graphics import NodeItem, ConnectionItem
 
@@ -76,11 +74,3 @@ def restore_graph_state(state: dict, ctx: GraphRestoreContext) -> None:
 
     ctx.clear_config_panel()
     ctx.on_evaluate()
-
-
-def bind_restore_node_press(node_item, node_model, on_select_config: Callable) -> None:
-    def mp(event, n=node_item, nm=node_model):
-        QGraphicsRectItem.mousePressEvent(n, event)
-        on_select_config(nm)
-
-    node_item.mousePressEvent = mp

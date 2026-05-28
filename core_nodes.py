@@ -289,15 +289,21 @@ class InvertNode(EffectNode):
         res_rgb = 255 - image[:,:,:3]
         return np.dstack([res_rgb, image[:,:,3]])
 
-class MaskInvertNode(EffectNode):
-    """反向選取：反轉 Alpha 通道"""
+class MaskInvertNode(Node):
+    """反向選取：反轉遮罩範圍。"""
     def __init__(self):
         super().__init__()
         self.name = "反向選取 (Mask Invert)"
+        self.add_input("Mask In", pin_type="mask")
+        self.add_output("Mask Out", pin_type="mask")
 
-    def apply_effect(self, image):
-        res_alpha = 255 - image[:,:,3]
-        return np.dstack([image[:,:,:3], res_alpha])
+    def process(self, **kwargs):
+        mask = kwargs.get("Mask In")
+        if mask is None:
+            return {"Mask Out": None}
+        if len(mask.shape) > 2:
+            mask = Node._extract_mask(mask)
+        return {"Mask Out": 255 - mask}
 
 class BlendNode(Node):
     def __init__(self):

@@ -1,4 +1,5 @@
-import sys
+from contextlib import nullcontext
+
 from PySide6.QtWidgets import *
 from PySide6.QtGui import *
 from PySide6.QtCore import *
@@ -120,21 +121,16 @@ class ConnectionItem(QGraphicsPathItem):
 
     def remove(self, lock_graph=True):
         scene = self.scene()
-        win = None
-        if scene and scene.views():
-            win = getattr(scene.views()[0], "main_window", None)
-        locker = None
-        if lock_graph and win and hasattr(win, "_graph_evaluator") and win._graph_evaluator:
-            locker = QMutexLocker(win._graph_evaluator.mutex)
-
-        if self.out_pin_item:
-            self.out_pin_item.remove_connection(self)
-        if self.in_pin_item:
-            self.in_pin_item.remove_connection(self)
-            if self.edge_model:
-                self.in_pin_item.pin.disconnect_edge(self.edge_model)
-        if self.scene():
-            self.scene().removeItem(self)
+        lock = scene.graph_lock() if lock_graph and isinstance(scene, GraphScene) else nullcontext()
+        with lock:
+            if self.out_pin_item:
+                self.out_pin_item.remove_connection(self)
+            if self.in_pin_item:
+                self.in_pin_item.remove_connection(self)
+                if self.edge_model:
+                    self.in_pin_item.pin.disconnect_edge(self.edge_model)
+            if self.scene():
+                self.scene().removeItem(self)
 
     def update_path(self):
         start_pos = self.out_pin_item.scenePos()
@@ -340,22 +336,17 @@ class NodeItem(QGraphicsRectItem):
 
     def remove(self):
         scene = self.scene()
-        win = None
-        if scene and scene.views():
-            win = getattr(scene.views()[0], "main_window", None)
-        locker = None
-        if win and hasattr(win, "_graph_evaluator") and win._graph_evaluator:
-            locker = QMutexLocker(win._graph_evaluator.mutex)
-
-        for pin_item in self.pin_items.values():
-            for conn in list(pin_item.connections):
-                conn.remove(lock_graph=False)
-        if win and getattr(win, "output_node", None) is self.node_model:
-            win.output_node = None
-        if self.scene():
-            if hasattr(self.scene(), "graph"):
-                self.scene().graph.remove_node(self.node_model)
-            self.scene().removeItem(self)
+        lock = scene.graph_lock() if isinstance(scene, GraphScene) else nullcontext()
+        with lock:
+            for pin_item in self.pin_items.values():
+                for conn in list(pin_item.connections):
+                    conn.remove(lock_graph=False)
+            if isinstance(scene, GraphScene):
+                scene.notify_node_removed(self.node_model)
+                scene.graph.remove_node(self.node_model)
+                scene.removeItem(self)
+            elif self.scene():
+                self.scene().removeItem(self)
 
 # ==================== 群組外框 (Backdrop) ====================
 class BackdropItem(QGraphicsRectItem):
@@ -488,11 +479,24 @@ class GraphScene(QGraphicsScene):
     graph_structure_changed = Signal()
     graph_state_changed = Signal()
 
-    def __init__(self, graph, parent=None):
+    def __init__(self, graph, parent=None, controller=None):
         super().__init__(parent)
         self.graph = graph
+        self.controller = controller
         self.setSceneRect(-2000, -2000, 4000, 4000)
         self.current_connection = None
+
+    def set_controller(self, controller):
+        self.controller = controller
+
+    def graph_lock(self):
+        if self.controller:
+            return self.controller.lock()
+        return nullcontext()
+
+    def notify_node_removed(self, node):
+        if self.controller:
+            self.controller.node_removed(node)
 
     def iter_pin_items(self):
         for it in self.items():
@@ -601,44 +605,41 @@ class GraphScene(QGraphicsScene):
 
     def mouseReleaseEvent(self, event):
         if self.current_connection:
-            win = None
-            if self.views():
-                win = getattr(self.views()[0], "main_window", None)
-            locker = None
-            if win and hasattr(win, "_graph_evaluator") and win._graph_evaluator:
-                locker = QMutexLocker(win._graph_evaluator.mutex)
-
-            self.clear_pin_drag_highlight()
-            pos = event.scenePos()
-            snap_pi = self.find_nearest_compatible_input_pin(
-                pos,
-                self.current_connection.out_pin_item.pin.pin_type,
-                SNAP_PIN_DISTANCE,
-            )
-            if snap_pi is not None:
-                pos = snap_pi.scenePos()
-            items = self.items(pos)
-            pin_item = next((item for item in items if isinstance(item, PinItem)), None)
-
-            if pin_item and pin_item.is_input:
-                if can_connect_pins(
+            connection_created = False
+            with self.graph_lock():
+                self.clear_pin_drag_highlight()
+                pos = event.scenePos()
+                snap_pi = self.find_nearest_compatible_input_pin(
+                    pos,
                     self.current_connection.out_pin_item.pin.pin_type,
-                    pin_item.pin.pin_type,
-                ):
-                    self.current_connection.in_pin_item = pin_item
-                    pin_item.add_connection(self.current_connection)
-                    self.current_connection.update_path()
+                    SNAP_PIN_DISTANCE,
+                )
+                if snap_pi is not None:
+                    pos = snap_pi.scenePos()
+                items = self.items(pos)
+                pin_item = next((item for item in items if isinstance(item, PinItem)), None)
 
-                    edge = pin_item.pin.connect(self.current_connection.out_pin_item.pin)
-                    self.current_connection.edge_model = edge
-                    self.current_connection.weight_text.show()
-                    self.graph_structure_changed.emit()
-                    self.graph_state_changed.emit()
+                if pin_item and pin_item.is_input:
+                    if can_connect_pins(
+                        self.current_connection.out_pin_item.pin.pin_type,
+                        pin_item.pin.pin_type,
+                    ):
+                        self.current_connection.in_pin_item = pin_item
+                        pin_item.add_connection(self.current_connection)
+                        self.current_connection.update_path()
+
+                        edge = pin_item.pin.connect(self.current_connection.out_pin_item.pin)
+                        self.current_connection.edge_model = edge
+                        self.current_connection.weight_text.show()
+                        connection_created = True
+                    else:
+                        self.current_connection.out_pin_item.remove_connection(self.current_connection)
+                        self.removeItem(self.current_connection)
                 else:
                     self.current_connection.out_pin_item.remove_connection(self.current_connection)
                     self.removeItem(self.current_connection)
-            else:
-                self.current_connection.out_pin_item.remove_connection(self.current_connection)
-                self.removeItem(self.current_connection)
-            self.current_connection = None
+                self.current_connection = None
+            if connection_created:
+                self.graph_structure_changed.emit()
+                self.graph_state_changed.emit()
         super().mouseReleaseEvent(event)

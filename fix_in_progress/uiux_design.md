@@ -32,6 +32,8 @@
 | §7 Running | 先前在 `evaluate_graph` 內對全節點設 `_status='running'` 的短暫黃框已移除；改由評估過程中的錯誤狀態為主（若需 Running 動畫，可改在非同步 evaluate 時再做） | `main.py`（行為變更，review 時請注意） |
 | Redo（與操作流） | `Ctrl+Shift+Z` / `Ctrl+Y`；新操作清空 redo 堆疊 | `main.py` |
 | Signal 解耦 | 場景內不再假設 `parent()` 為 `MainWindow` 來呼叫 `evaluate_graph`／`save_state` | `ui_graphics.py`、`main.py` |
+| 拖曳圖片匯入 | PNG/JPG/BMP/WebP/TIFF 檔案或 image MIME 拖入工作區時，走與貼上相同的匯入管線並建立/綁定 Input 節點 | `image_importer.py`、`input_session.py`、`ui_components.py` |
+| 場景變更解耦 | `GraphSceneController` 顯式提供 graph mutex 與節點移除回呼，圖元不再反查 `main_window` | `graph_controller.py`、`ui_graphics.py` |
 
 **仍未做（本文件原列）**：§6 節點內嵌控件；§8 Accordion；拖線「錯誤震動」動畫；Bypass 節點整體再降透明度（僅維持既有虛線／樣式者可再強化）。
 
@@ -46,6 +48,7 @@
 | 3 節點收合 | 已實作 | 雙擊切換 `is_collapsed`；收合時隱藏縮圖 |
 | 4 網格與吸附 | 已實作 | `GraphScene.drawBackground` 點狀網格；`NodeItem.itemChange` 20px 吸附 |
 | 5 智慧連線 | **部分→強化** | 綠／紅筆、釋放拒絕、**Pin 弱化**、**磁吸**、與引擎 `can_connect_pins` 一致；尚無震動動畫 |
+| 拖曳圖片匯入 | **已實作** | 工作區與主視窗接收圖片 MIME / 本機影像檔 URL，匯入效果與貼上圖片一致 |
 | 6 節點內控件 | 未實作 | 參數仍以左側 `ConfigPanel` 為主 |
 | 7 運算狀態 | **部分→強化** | **Error** 已接 `_status` + Tooltip；**Running** 黃框已自同步 evaluate 路徑移除（見 §0） |
 | 8 側欄強化 | 部分實作 | 直方圖已有；Accordion 未做 |

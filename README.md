@@ -55,6 +55,7 @@
 - **節點跳過 (Bypass)**：右鍵節點 → 跳過節點，暗化顯示 + 虛線邊框
 - **連線 Bypass**：右鍵連線 → 啟用/停用，灰色虛線表示
 - **畫布縮放**：滾輪縮放 (0.1x ~ 5.0x)
+- **圖片拖曳匯入**：可直接將 PNG / JPG / BMP 等圖片拖入工作區，效果與貼上圖片一致
 - **可調介面佈局**：所有面板均可自由拖曳分割線調整大小
 
 ## 快捷鍵
@@ -63,6 +64,7 @@
 |--------|------|
 | `Ctrl+V` | 從剪貼簿貼上圖片 |
 | `Ctrl+Z` | 復原上一步 (最多 30 步) |
+| `Ctrl+Shift+Z` / `Ctrl+Y` | 重做下一步 |
 | `Ctrl+S` | 匯出範本 (JSON) |
 | `Delete` / `Backspace` | 刪除選中的節點或連線 |
 | 滾輪 | 縮放畫布 |
@@ -101,11 +103,22 @@ python main.py
 
 ```
 posta/
-├── main.py           # 主視窗、UI 佈局、歷史管理
-├── core_engine.py    # 核心引擎：Graph / Node / Pin / Edge / Dirty Flag
-├── core_nodes.py     # 所有節點的實作邏輯
-├── ui_graphics.py    # 畫布元件：PinItem / NodeItem / ConnectionItem / Backdrop / StickyNote
-└── README.md         # 本文件
+├── main.py              # MainWindow 與應用程式編排
+├── core_engine.py       # 核心引擎：Graph / Node / Pin / Edge / Dirty Flag
+├── core_nodes.py        # 節點運算實作
+├── node_registry.py     # 節點註冊表與 palette 分類
+├── node_factory.py      # 節點建立與 NodeItem 事件綁定
+├── input_session.py     # 輸入圖片狀態（全域輸入、多張貼上/拖曳）
+├── image_importer.py    # 剪貼簿、檔案對話框、拖曳圖片匯入
+├── image_io.py          # OpenCV / NumPy / Qt 影像轉換工具
+├── graph_controller.py  # GraphScene 的鎖與節點移除協調
+├── graph_evaluator.py   # 同步/背景圖評估
+├── graph_state.py       # JSON 狀態序列化
+├── graph_restore.py     # JSON 狀態還原到 graph/scene
+├── history.py           # Undo / Redo 歷史堆疊
+├── ui_graphics.py       # 畫布圖元：Pin / Node / Connection / Backdrop / StickyNote
+├── ui_components.py     # 側欄、預覽、屬性面板、搜尋選單、CanvasView
+└── test_refactor.py     # 輕量回歸測試
 ```
 
 ## 架構概覽

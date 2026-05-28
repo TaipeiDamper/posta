@@ -30,12 +30,8 @@ class GraphEvaluator(QObject):
         self._revision = 0
         self._pending_revision = 0
         self._worker = None
-        self._use_background = True
-
-    def set_use_background(self, enabled: bool):
-        self._use_background = bool(enabled)
-        if not enabled and self._worker and self._worker.isRunning():
-            self._worker.wait(3000)
+        # 背景執行緒保留為內部骨架；預設同步評估，避免無事件迴圈測試或關閉時遺留 QThread。
+        self._use_background = False
 
     def bump_revision(self):
         self._revision += 1

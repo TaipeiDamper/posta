@@ -94,7 +94,7 @@ class MyCustomNode(Node):
 
 ## 註冊節點到介面
 
-在 `main.py` 的 `NODE_MAP` 中加入一行：
+在 `node_registry.py` 的 `NODE_MAP` 中加入一行：
 
 ```python
 NODE_MAP = {
@@ -103,16 +103,19 @@ NODE_MAP = {
 }
 ```
 
-並在 `node_palette.addItems()` 中加入對應的選單項目：
+並在同檔的 `PALETTE_CATEGORIES` 中加入對應的選單項目：
 
 ```python
-self.node_palette.addItems([
-    # ... 現有項目 ...
-    "懷舊色調 (Sepia)",  # 新增這行
-])
+PALETTE_CATEGORIES = [
+    # ... 現有分類 ...
+    ("--- 亮度與色調 ---", QColor(255, 180, 100), [
+        # ... 現有節點 ...
+        "懷舊色調 (Sepia)",  # 新增這行
+    ]),
+]
 ```
 
-記得在 `main.py` 頂部的 import 中加入你的節點類別。
+記得在 `node_registry.py` 頂部的 import 中加入你的節點類別。節點建立流程由 `node_factory.py` 統一處理，不需要修改 `main.py`。
 
 ## Pin 類型
 

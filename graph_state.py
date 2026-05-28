@@ -2,15 +2,12 @@
 
 import json
 
-from ui_graphics import NodeItem
 
-
-def get_graph_state(graph, scene):
+def get_graph_state(graph, node_positions=None):
     state = {"nodes": [], "edges": []}
-    nmap = {i.node_model: i for i in scene.items() if isinstance(i, NodeItem)}
+    node_positions = node_positions or {}
     for node in graph.nodes:
-        item = nmap.get(node)
-        p = (item.scenePos().x(), item.scenePos().y()) if item else (0, 0)
+        p = node_positions.get(node.id, (0, 0))
         state["nodes"].append({
             "id": node.id,
             "type": node.__class__.__name__,

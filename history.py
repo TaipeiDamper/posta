@@ -43,9 +43,6 @@ class HistoryManager:
         finally:
             self._is_restoring = False
 
-    def push_initial(self):
-        self.save_state()
-
     def restore_quiet(self, state):
         """還原狀態且不觸發 save_state（用於匯入範本等）。"""
         self._is_restoring = True

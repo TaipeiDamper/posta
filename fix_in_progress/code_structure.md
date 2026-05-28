@@ -40,21 +40,33 @@
 | UI 與主視窗解耦 | `ui_graphics.py`、`main.py` | `GraphScene.graph_structure_changed` / `graph_state_changed` Signal；連線／節點／刪除鍵改 `emit`，不再 `scene.parent().evaluate_graph` |
 | 啟動時評估 | `main.py` | `setup_default_nodes` 後接 `evaluate_graph()`，與 Signal 連線後再跑，避免初始畫面不同步 |
 | 連線 UX（磁吸／Pin 弱化） | `ui_graphics.py` | 拖線時 `set_pin_drag_highlight`；相容輸入 Pin 磁吸（`SNAP_PIN_DISTANCE`）；`mouseRelease` 與 `ConnectionItem.update_path` 與 `can_connect_pins` 一致 |
+| 圖片匯入獨立化 | `image_importer.py`、`input_session.py`、`main.py` | 剪貼簿、檔案對話框、拖曳圖片共用 `ImageImportManager`；輸入圖狀態集中於 `InputSession` |
+| 節點工廠 | `node_factory.py`、`main.py`、`graph_restore.py` | `add_node_by_name` 委派 `NodeFactory`；新建與還原節點共用 `bind_node_item_events` |
+| 場景控制器 | `graph_controller.py`、`ui_graphics.py` | `GraphSceneController` 提供 graph mutex 與節點移除回呼；`ui_graphics.py` 不再反查 `main_window` |
+| 序列化純化 | `graph_state.py`、`main.py` | `get_graph_state` 改接收節點位置 dict，不再 import `NodeItem`；移除未使用 `Graph.to_json()` |
+| 產物清理 | `.gitignore` | 忽略 `__pycache__/`、`*.pyc`、`run_output.log`，避免測試產物進入版本控制 |
 
-**仍未做（與本文件原建議對照）**：`main.py` 拆檔（image_io / factory / history / serializer）、裝飾器式 `NODE_REGISTRY`、全節點 `param_meta` 覆蓋、`QThread` 非同步 `evaluate`。（Halftone 向量化已見 §0／§4.1，不再列於此。）
+**仍未做（與本文件原建議對照）**：裝飾器式 `NODE_REGISTRY`、全節點 `param_meta` 覆蓋、完整評估結果快照通道、`core_nodes.py` 依節點類型拆包。（Halftone 向量化與主要 `main.py` 拆檔已見 §0，不再列於此。）
 
 ---
 
 ## 1. 整體架構總覽
 
 ```
-main.py（約 850 行）          → UI 主視窗 + 業務邏輯
-  ├── core_engine.py（約 300 行）  → DAG 圖引擎
-  ├── core_nodes.py（約 690 行）   → 所有節點定義
-  └── ui_graphics.py（約 605 行）  → 場景 / 節點 / 連線繪製
+main.py                    → MainWindow 與應用編排
+  ├── core_engine.py        → DAG 圖引擎
+  ├── core_nodes.py         → 節點運算定義
+  ├── node_registry.py      → 節點註冊與 palette 分類
+  ├── node_factory.py       → 節點建立與事件綁定
+  ├── input_session.py      → 輸入圖片狀態
+  ├── image_importer.py     → 剪貼簿 / 拖曳 / 檔案匯入
+  ├── graph_controller.py   → GraphScene 變更協調
+  ├── graph_state.py        → 狀態序列化
+  ├── graph_restore.py      → 狀態還原
+  └── ui_graphics.py        → 場景 / 節點 / 連線繪製
 ```
 
-**現狀評價**：四檔案的職責劃分大方向正確，但 `main.py` 仍承擔過多角色（UI 佈局、圖片 I/O、節點工廠、歷史管理、序列化還原等），是最適合逐步拆分的對象。
+**現狀評價**：核心引擎、UI 圖元、節點建立、輸入狀態、匯入流程、歷史與序列化已拆成獨立模組。`main.py` 仍是整合點，但不再直接承擔圖片匯入、節點工廠與場景變更細節。
 
 ---
 
