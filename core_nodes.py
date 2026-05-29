@@ -254,6 +254,8 @@ class LuminanceNode(Node):
         self.add_output("Mask Out", pin_type="mask")
         self.params["min_brightness"] = 128
         self.params["max_brightness"] = 255
+        self.param_meta["min_brightness"] = {"min": 0, "max": 255}
+        self.param_meta["max_brightness"] = {"min": 0, "max": 255}
 
     def process(self, **kwargs):
         image = kwargs.get("Image In")
@@ -615,6 +617,8 @@ class MidtoneKeyNode(Node):
         self.add_output("Mask Out", pin_type="mask")
         self.params["min_brightness"] = 76   # ~30%
         self.params["max_brightness"] = 178  # ~70%
+        self.param_meta["min_brightness"] = {"min": 0, "max": 255}
+        self.param_meta["max_brightness"] = {"min": 0, "max": 255}
 
     def process(self, **kwargs):
         image = kwargs.get("Image In")
@@ -740,3 +744,140 @@ class GrainNode(EffectNode):
         res_rgb = image[:,:,:3].astype(np.float32) + noise
         result = np.dstack([np.clip(res_rgb, 0, 255).astype(np.uint8), image[:,:,3]])
         return result
+
+class BloomNode(EffectNode):
+    """輝光節點 (Bloom / Glow)：提取圖像中的亮部進行高斯模糊並與原圖加算混合。"""
+    def __init__(self):
+        super().__init__()
+        self.name = "輝光 (Bloom)"
+        self.params["threshold"] = 200
+        self.params["blur_size"] = 21
+        self.params["intensity"] = 50
+        self.param_meta["threshold"] = {"min": 0, "max": 255}
+        self.param_meta["blur_size"] = {"min": 1, "max": 101}
+        self.param_meta["intensity"] = {"min": 0, "max": 100}
+
+    def apply_effect(self, image):
+        # 1. 轉灰階以計算亮度
+        gray = cv2.cvtColor(image[:,:,:3], cv2.COLOR_BGR2GRAY)
+        
+        # 2. 提取高於閾值的亮部
+        thresh_val = int(self.params["threshold"])
+        _, mask = cv2.threshold(gray, thresh_val, 255, cv2.THRESH_BINARY)
+        
+        # 3. 將遮罩轉回 3 通道，並只保留亮部色彩
+        mask_3 = cv2.merge([mask, mask, mask])
+        bright = cv2.bitwise_and(image[:,:,:3], mask_3)
+        
+        # 4. 對亮部進行高斯模糊
+        k = int(self.params["blur_size"])
+        if k % 2 == 0: k += 1
+        if k < 1: k = 1
+        blurred = cv2.GaussianBlur(bright, (k, k), 0)
+        
+        # 5. 依據強度疊加回原圖 (加算混合)
+        factor = float(self.params["intensity"]) / 100.0
+        glow = blurred.astype(np.float32) * factor
+        
+        res_rgb = image[:,:,:3].astype(np.float32) + glow
+        result = np.dstack([np.clip(res_rgb, 0, 255).astype(np.uint8), image[:,:,3]])
+        return result
+
+class ChannelSplitNode(Node):
+    """通道分離節點：將彩色圖像的 R、G、B、A 分離成 4 個獨立的遮罩輸出。"""
+    def __init__(self):
+        super().__init__()
+        self.name = "通道分離 (Channel Split)"
+        self.add_input("Image In")
+        self.add_output("R Out", pin_type="mask")
+        self.add_output("G Out", pin_type="mask")
+        self.add_output("B Out", pin_type="mask")
+        self.add_output("A Out", pin_type="mask")
+
+    def process(self, **kwargs):
+        img = kwargs.get("Image In")
+        if img is None:
+            return {"R Out": None, "G Out": None, "B Out": None, "A Out": None}
+            
+        b, g, r, a = cv2.split(img)
+        return {"R Out": r, "G Out": g, "B Out": b, "A Out": a}
+
+class ChannelMergeNode(Node):
+    """通道合併節點：接收 R、G、B、A 獨立遮罩輸入，重新合併成彩色圖像。"""
+    def __init__(self):
+        super().__init__()
+        self.name = "通道合併 (Channel Merge)"
+        self.add_input("R In", pin_type="mask")
+        self.add_input("G In", pin_type="mask")
+        self.add_input("B In", pin_type="mask")
+        self.add_input("A In", pin_type="mask")
+        self.add_output("Image Out")
+
+    def process(self, **kwargs):
+        r = kwargs.get("R In")
+        g = kwargs.get("G In")
+        b = kwargs.get("B In")
+        a = kwargs.get("A In")
+        
+        # 尋找參考尺寸
+        ref_shape = None
+        for m in (r, g, b, a):
+            if m is not None:
+                ref_shape = m.shape[:2]
+                break
+                
+        if ref_shape is None:
+            return {"Image Out": None}
+            
+        h, w = ref_shape
+        
+        # 處理缺失通道：RGB 預設 0，A 預設 255
+        def prepare_channel(ch, default_val):
+            if ch is None:
+                return np.ones((h, w), dtype=np.uint8) * default_val
+            if ch.shape[:2] != (h, w):
+                return cv2.resize(ch, (w, h))
+            return ch
+
+        r_ch = prepare_channel(r, 0)
+        g_ch = prepare_channel(g, 0)
+        b_ch = prepare_channel(b, 0)
+        a_ch = prepare_channel(a, 255)
+        
+        merged = cv2.merge([b_ch, g_ch, r_ch, a_ch])
+        return {"Image Out": merged}
+
+
+class ApplyMaskNode(Node):
+    """套用遮罩節點：將選取的遮罩 (Mask) 作為透明度 (Alpha) 套用到彩色圖像上。"""
+    def __init__(self):
+        super().__init__()
+        self.name = "套用遮罩 (Apply Mask)"
+        self.add_input("Image In")
+        self.add_input("Mask In", pin_type="mask")
+        self.add_output("Image Out")
+
+    def process(self, **kwargs):
+        image = kwargs.get("Image In")
+        mask = kwargs.get("Mask In")
+        
+        if image is None:
+            return {"Image Out": None}
+        if mask is None:
+            # 若無輸入遮罩，預設回傳原圖
+            return {"Image Out": image}
+            
+        # 確保尺寸一致
+        if mask.shape[:2] != image.shape[:2]:
+            mask = cv2.resize(mask, (image.shape[1], image.shape[0]))
+            
+        result = image.copy()
+        # 乘算原圖透明度與遮罩，使原圖本就透明的像素維持透明
+        orig_alpha = image[:,:,3].astype(np.float32) / 255.0
+        mask_alpha = mask.astype(np.float32) / 255.0
+        new_alpha = np.clip(orig_alpha * mask_alpha * 255.0, 0, 255).astype(np.uint8)
+        
+        result[:,:,3] = new_alpha
+        return {"Image Out": result}
+
+

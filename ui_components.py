@@ -296,6 +296,31 @@ class CanvasView(QGraphicsView):
         self.main_window.add_node_by_name(name, pos)
         event.acceptProposedAction()
 
+    def fit_all(self):
+        rect = QRectF()
+        has_nodes = False
+        for item in self.scene().items():
+            if item.__class__.__name__ == "NodeItem":
+                rect = rect.united(item.sceneBoundingRect())
+                has_nodes = True
+        
+        if not has_nodes:
+            self._zoom = 1.0
+            self.setTransform(QTransform())
+            self.centerOn(0, 0)
+        else:
+            # 加上適當的邊界 (50 像素)
+            rect = rect.adjusted(-50, -50, 50, 50)
+            self.fitInView(rect, Qt.KeepAspectRatio)
+            self._zoom = self.transform().m11()
+            # 限制縮放極限
+            if self._zoom < 0.1:
+                self._zoom = 0.1
+                self.setTransform(QTransform().scale(0.1, 0.1))
+            elif self._zoom > 5.0:
+                self._zoom = 5.0
+                self.setTransform(QTransform().scale(5.0, 5.0))
+
     def keyPressEvent(self, event):
         if event.key() in (Qt.Key_Space, Qt.Key_Tab):
             menu = SearchMenu(self, self.mapToScene(self.mapFromGlobal(QCursor.pos())), self.node_map)
@@ -304,6 +329,9 @@ class CanvasView(QGraphicsView):
                 name = menu.get_selected()
                 if name:
                     self.main_window.add_node_by_name(name, menu.pos_scene)
+            event.accept()
+        elif event.key() == Qt.Key_F:
+            self.fit_all()
             event.accept()
         else:
             super().keyPressEvent(event)

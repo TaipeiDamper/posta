@@ -29,6 +29,10 @@ from core_nodes import (
     HalftoneNode,
     GrainNode,
     MaskInvertNode,
+    BloomNode,
+    ChannelSplitNode,
+    ChannelMergeNode,
+    ApplyMaskNode,
 )
 
 NODE_MAP = {
@@ -50,6 +54,7 @@ NODE_MAP = {
     "Blur": ("高斯模糊", BlurNode),
     "Halftone": ("半調子網點", HalftoneNode),
     "Grain": ("底片顆粒", GrainNode),
+    "Glow": ("輝光", BloomNode),
     "Merge": ("圖層合併", MergeNode),
     "Blend": ("進階混合", BlendNode),
     "Switcher": ("時間切換", SwitcherNode),
@@ -58,6 +63,9 @@ NODE_MAP = {
     "Value": ("數值", ValueNode),
     "ColorOut": ("顏色輸出", ColorOutputNode),
     "Reroute": ("轉向", RerouteNode),
+    "Channel Split": ("通道分離", ChannelSplitNode),
+    "Channel Merge": ("通道合併", ChannelMergeNode),
+    "Apply Mask": ("套用遮罩", ApplyMaskNode),
 }
 
 DISPLAY_NAME_TO_KEY = {display: key for key, (display, _) in NODE_MAP.items()}
@@ -69,12 +77,14 @@ for _k, (_d, _cls) in NODE_MAP.items():
 # 左側 palette 分類（header, 項目色, 顯示名稱列表）
 PALETTE_CATEGORIES = [
     ("--- 輸入/輸出 ---", QColor(150, 200, 255), ["輸入 (Input)", "輸出 (Output)"]),
+    ("--- 核心運算 ---", QColor(230, 80, 80), ["套用遮罩 (Apply Mask)"]),
     ("--- 邊緣與輪廓 ---", QColor(150, 255, 150), ["邊緣擷取 (Edge Detect)", "索伯邊緣 (Sobel)", "輪廓提取 (Contour)", "鉛筆素描 (Sketch)"]),
-    ("--- 亮度與色調 ---", QColor(255, 180, 100), ["明度選取 (Luma)", "中間調選取 (Midtone)", "亮度對比 (Brightness)", "負片 (Invert)", "反向選取 (Mask Invert)", "染色 (Tint)", "替換顏色 (Color Replace)", "色階分離 (Posterize)", "漸層對映 (Grad Map)"]),
+    ("--- 亮度與色調 ---", QColor(255, 180, 100), ["明度選取 (Luma)", "中間調選取 (Midtone)", "亮度對比 (Brightness)", "負片 (Invert)", "反向選取 (Mask Invert)", "染色 (Tint)", "替換顏色 (Color Replace)", "色階分離 (Posterize)", "漸層對映 (Grad Map)", "輝光 (Glow)"]),
     ("--- 質感與雜訊 ---", QColor(150, 255, 200), ["高斯模糊 (Blur)", "半調子網點 (Halftone)", "底片顆粒 (Grain)"]),
     ("--- 變形與文字 ---", QColor(200, 150, 255), ["文字 (Text)", "智慧裁切 (Crop)"]),
-    ("--- 合成與工具 ---", QColor(100, 200, 255), ["圖層合併 (Merge)", "進階混合 (Blend)", "時間切換 (Switcher)", "數值 (Value)", "顏色 (ColorOut)", "轉向 (Reroute)"]),
+    ("--- 合成與工具 ---", QColor(100, 200, 255), ["圖層合併 (Merge)", "進階混合 (Blend)", "時間切換 (Switcher)", "數值 (Value)", "顏色 (ColorOut)", "轉向 (Reroute)", "通道分離 (Channel Split)", "通道合併 (Channel Merge)"]),
 ]
+
 
 
 def resolve_registry_key(name):

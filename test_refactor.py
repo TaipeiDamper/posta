@@ -139,6 +139,97 @@ def test_clear_input_state():
     
     print("clear_input_image state clean test passed!")
 
+def test_bloom_node():
+    print("Testing BloomNode...")
+    from core_nodes import BloomNode
+    node = BloomNode()
+    node.params["threshold"] = 200
+    node.params["blur_size"] = 3
+    node.params["intensity"] = 100
+    
+    # 創建一個 5x5 的影像，只有正中間的點是超亮像素，其他是黑色
+    img = np.zeros((5, 5, 4), dtype=np.uint8)
+    img[:, :, 3] = 255
+    img[2, 2, :3] = 255 # 亮點
+    
+    res = node.process(**{"Image In": img})
+    out_img = res["Image Out"]
+    
+    assert out_img is not None
+    # 檢查亮點周圍本來是黑色的像素，是否因為高斯模糊發光疊加後不再是 0
+    assert out_img[2, 2, 0] == 255
+    assert out_img[2, 1, 0] > 0, "Glow should spread to adjacent pixels"
+    print("BloomNode test passed!")
+
+def test_channel_split_merge_nodes():
+    print("Testing ChannelSplitNode and ChannelMergeNode...")
+    from core_nodes import ChannelSplitNode, ChannelMergeNode
+    split_node = ChannelSplitNode()
+    merge_node = ChannelMergeNode()
+    
+    # 建立一個測試用 BGRA 影像
+    img = np.random.randint(0, 256, (10, 10, 4), dtype=np.uint8)
+    
+    # 進行拆分
+    split_res = split_node.process(**{"Image In": img})
+    r = split_res["R Out"]
+    g = split_res["G Out"]
+    b = split_res["B Out"]
+    a = split_res["A Out"]
+    
+    assert r is not None and g is not None and b is not None and a is not None
+    
+    # 進行合併
+    merge_res = merge_node.process(**{"R In": r, "G In": g, "B In": b, "A In": a})
+    merged_img = merge_res["Image Out"]
+    
+    assert merged_img is not None
+    assert np.array_equal(img, merged_img), "Roundtrip split and merge should reproduce original image exactly"
+    print("ChannelSplitNode and ChannelMergeNode test passed!")
+
+def test_apply_mask_node():
+    print("Testing ApplyMaskNode...")
+    from core_nodes import ApplyMaskNode
+    node = ApplyMaskNode()
+    
+    # 建立 5x5 的隨機色彩影像 (Alpha = 255)
+    img = np.random.randint(0, 256, (5, 5, 4), dtype=np.uint8)
+    img[:, :, 3] = 255
+    
+    # 建立一個測試遮罩 (一部份 255，一部份 0)
+    mask = np.zeros((5, 5), dtype=np.uint8)
+    mask[1:4, 1:4] = 255
+    
+    res = node.process(**{"Image In": img, "Mask In": mask})
+    out_img = res["Image Out"]
+    
+    assert out_img is not None
+    # 驗證 RGB 是否未變動
+    assert np.array_equal(img[:,:,:3], out_img[:,:,:3]), "RGB channels should not be modified by ApplyMaskNode"
+    # 驗證 Alpha 通道是否與遮罩相同
+    assert np.array_equal(out_img[:,:,3], mask), "Alpha channel should match the applied mask exactly"
+    print("ApplyMaskNode test passed!")
+
+def test_luma_midtone_param_meta():
+    print("Testing Luma and Midtone param_meta range limits...")
+    from core_nodes import LuminanceNode, MidtoneKeyNode
+    from ui_components import ConfigPanel
+    
+    luma_node = LuminanceNode()
+    midtone_node = MidtoneKeyNode()
+    
+    min_range_luma = ConfigPanel._numeric_range_for_key(luma_node, "min_brightness", 0)
+    max_range_luma = ConfigPanel._numeric_range_for_key(luma_node, "max_brightness", 255)
+    assert min_range_luma == (0, 255), f"Expected (0, 255), got {min_range_luma}"
+    assert max_range_luma == (0, 255), f"Expected (0, 255), got {max_range_luma}"
+    
+    min_range_midtone = ConfigPanel._numeric_range_for_key(midtone_node, "min_brightness", 0)
+    max_range_midtone = ConfigPanel._numeric_range_for_key(midtone_node, "max_brightness", 255)
+    assert min_range_midtone == (0, 255), f"Expected (0, 255), got {min_range_midtone}"
+    assert max_range_midtone == (0, 255), f"Expected (0, 255), got {max_range_midtone}"
+    
+    print("Luma and Midtone param_meta range limits test passed!")
+
 if __name__ == "__main__":
     test_proxy_scale()
     test_merge_node_overflow()
@@ -146,4 +237,8 @@ if __name__ == "__main__":
     test_mask_invert_node_registry()
     test_mask_invert_node_mask_io()
     test_clear_input_state()
+    test_bloom_node()
+    test_channel_split_merge_nodes()
+    test_apply_mask_node()
+    test_luma_midtone_param_meta()
     print("All tests passed successfully!")
