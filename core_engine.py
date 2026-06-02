@@ -117,7 +117,8 @@ class Node:
         current_hash = self._params_hash()
         if current_hash != self._last_params_hash:
             self._last_params_hash = current_hash
-            self._dirty = True
+            self.mark_dirty()
+
 
     @staticmethod
     def _extract_mask(data):

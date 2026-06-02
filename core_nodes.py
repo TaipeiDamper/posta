@@ -252,18 +252,32 @@ class LuminanceNode(Node):
         self.name = "明度選取 (Luma Key)"
         self.add_input("Image In")
         self.add_output("Mask Out", pin_type="mask")
-        self.params["min_brightness"] = 128
-        self.params["max_brightness"] = 255
-        self.param_meta["min_brightness"] = {"min": 0, "max": 255}
-        self.param_meta["max_brightness"] = {"min": 0, "max": 255}
+        self.params["range_min (%)"] = 50
+        self.params["range_max (%)"] = 100
+        self.params["softness (%)"] = 5
+        self.param_meta["range_min (%)"] = {"min": 0, "max": 100}
+        self.param_meta["range_max (%)"] = {"min": 0, "max": 100}
+        self.param_meta["softness (%)"] = {"min": 0, "max": 100}
 
     def process(self, **kwargs):
         image = kwargs.get("Image In")
         if image is None: return {"Mask Out": None}
         
         gray = cv2.cvtColor(image[:,:,:3], cv2.COLOR_BGR2GRAY)
-        mask = cv2.inRange(gray, self.params["min_brightness"], self.params["max_brightness"])
-        return {"Mask Out": mask}
+        min_val = float(self.params["range_min (%)"] * 2.55)
+        max_val = float(self.params["range_max (%)"] * 2.55)
+        soft_val = float(self.params["softness (%)"] * 2.55)
+        
+        if soft_val > 0.001:
+            gray_f = gray.astype(np.float32)
+            lower_factor = np.clip((gray_f - (min_val - soft_val)) / soft_val, 0.0, 1.0)
+            upper_factor = np.clip(((max_val + soft_val) - gray_f) / soft_val, 0.0, 1.0)
+            mask_f = np.minimum(lower_factor, upper_factor) * 255.0
+            return {"Mask Out": mask_f.astype(np.uint8)}
+        else:
+            mask = cv2.inRange(gray, int(min_val), int(max_val))
+            return {"Mask Out": mask}
+
 
 class BrightnessContrastNode(EffectNode):
     def __init__(self):
@@ -615,20 +629,32 @@ class MidtoneKeyNode(Node):
         self.name = "中間調選取 (Midtone)"
         self.add_input("Image In")
         self.add_output("Mask Out", pin_type="mask")
-        self.params["min_brightness"] = 76   # ~30%
-        self.params["max_brightness"] = 178  # ~70%
-        self.param_meta["min_brightness"] = {"min": 0, "max": 255}
-        self.param_meta["max_brightness"] = {"min": 0, "max": 255}
+        self.params["range_min (%)"] = 30
+        self.params["range_max (%)"] = 70
+        self.params["softness (%)"] = 5
+        self.param_meta["range_min (%)"] = {"min": 0, "max": 100}
+        self.param_meta["range_max (%)"] = {"min": 0, "max": 100}
+        self.param_meta["softness (%)"] = {"min": 0, "max": 100}
 
     def process(self, **kwargs):
         image = kwargs.get("Image In")
         if image is None: return {"Mask Out": None}
         
         gray = cv2.cvtColor(image[:,:,:3], cv2.COLOR_BGR2GRAY)
-        min_b = int(self.params["min_brightness"])
-        max_b = int(self.params["max_brightness"])
-        mask = cv2.inRange(gray, min_b, max_b)
-        return {"Mask Out": mask}
+        min_val = float(self.params["range_min (%)"] * 2.55)
+        max_val = float(self.params["range_max (%)"] * 2.55)
+        soft_val = float(self.params["softness (%)"] * 2.55)
+        
+        if soft_val > 0.001:
+            gray_f = gray.astype(np.float32)
+            lower_factor = np.clip((gray_f - (min_val - soft_val)) / soft_val, 0.0, 1.0)
+            upper_factor = np.clip(((max_val + soft_val) - gray_f) / soft_val, 0.0, 1.0)
+            mask_f = np.minimum(lower_factor, upper_factor) * 255.0
+            return {"Mask Out": mask_f.astype(np.uint8)}
+        else:
+            mask = cv2.inRange(gray, int(min_val), int(max_val))
+            return {"Mask Out": mask}
+
 
 class PosterizeNode(EffectNode):
     """色階分離：減少色彩階層"""

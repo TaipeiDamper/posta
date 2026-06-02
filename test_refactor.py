@@ -218,17 +218,18 @@ def test_luma_midtone_param_meta():
     luma_node = LuminanceNode()
     midtone_node = MidtoneKeyNode()
     
-    min_range_luma = ConfigPanel._numeric_range_for_key(luma_node, "min_brightness", 0)
-    max_range_luma = ConfigPanel._numeric_range_for_key(luma_node, "max_brightness", 255)
-    assert min_range_luma == (0, 255), f"Expected (0, 255), got {min_range_luma}"
-    assert max_range_luma == (0, 255), f"Expected (0, 255), got {max_range_luma}"
+    min_range_luma = ConfigPanel._numeric_range_for_key(luma_node, "range_min (%)", 0)
+    max_range_luma = ConfigPanel._numeric_range_for_key(luma_node, "range_max (%)", 100)
+    assert min_range_luma == (0, 100), f"Expected (0, 100), got {min_range_luma}"
+    assert max_range_luma == (0, 100), f"Expected (0, 100), got {max_range_luma}"
     
-    min_range_midtone = ConfigPanel._numeric_range_for_key(midtone_node, "min_brightness", 0)
-    max_range_midtone = ConfigPanel._numeric_range_for_key(midtone_node, "max_brightness", 255)
-    assert min_range_midtone == (0, 255), f"Expected (0, 255), got {min_range_midtone}"
-    assert max_range_midtone == (0, 255), f"Expected (0, 255), got {max_range_midtone}"
+    min_range_midtone = ConfigPanel._numeric_range_for_key(midtone_node, "range_min (%)", 0)
+    max_range_midtone = ConfigPanel._numeric_range_for_key(midtone_node, "range_max (%)", 100)
+    assert min_range_midtone == (0, 100), f"Expected (0, 100), got {min_range_midtone}"
+    assert max_range_midtone == (0, 100), f"Expected (0, 100), got {max_range_midtone}"
     
     print("Luma and Midtone param_meta range limits test passed!")
+
 
 if __name__ == "__main__":
     test_proxy_scale()
